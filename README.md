@@ -1,61 +1,63 @@
 # synology-mcp
 
-Servidor MCP para gerir um NAS Synology (DSM 7) a partir do Claude ou de outro cliente MCP: saúde do sistema, discos, ficheiros, Container Manager, contas, segurança, Photos, Drive e qualquer outra API DSM que o NAS tenha.
+MCP server for managing a Synology NAS (DSM 7) from Claude or any other MCP client: system health, disks, files, Container Manager, accounts, security, Photos, Drive and any other DSM API your NAS offers.
 
-- **Só aparecem as ferramentas que fazem sentido.** No arranque, o servidor lê a lista de APIs do próprio NAS (`SYNO.API.Info`, sem login) e esconde o que não está instalado. Um pacote que não tens não gasta contexto.
-- **2FA sem códigos repetidos.** Um único código na `setup` troca-se por um token de dispositivo de confiança, guardado no Keychain.
-- **O certificado do NAS fica fixado.** O certificado por omissão do DSM é autoassinado. Em vez de desligar a verificação, a impressão digital é fixada e confirmada em cada ligação, antes de a palavra-passe sair.
-- **Não bloqueia o teu IP.** Credenciais recusadas nunca são reenviadas, para não disparar o Auto Block do DSM.
-- **Mudanças perigosas pedem confirmação.** Apagar, partilhar publicamente ou parar serviços devolve primeiro uma pré-visualização.
-- **Cobertura completa.** `dsm_api_search` e `dsm_read` chegam a qualquer API do NAS, mesmo sem ferramenta dedicada.
+**Status: early (0.1.0).** It is tested against a simulated DSM. On a real NAS, only API discovery and certificate pinning have been confirmed so far, without logging in. See [Verification status](#verification-status).
 
-## Instalar e ligar
+- **Only the tools that apply.** At startup the server reads the NAS's own API list (`SYNO.API.Info`, no login needed) and hides whatever isn't installed, so a package you don't have costs no context.
+- **2FA without repeated codes.** `setup` exchanges one code for a trusted-device token, stored in the Keychain.
+- **The NAS's certificate is pinned.** DSM's default certificate is self-signed. Instead of turning verification off, its fingerprint is pinned and checked on every connection, before the password is sent.
+- **It won't get your IP blocked.** Refused credentials are never sent again, so they can't trip DSM's Auto Block.
+- **Risky changes ask first.** Deleting, sharing publicly or stopping a package returns a preview before anything happens.
+- **Any DSM API.** `dsm_api_search` and `dsm_read` reach every API on the NAS, including those with no dedicated tool.
 
-Precisa de Node 22 ou mais recente.
+## Install and connect
+
+Requires Node 22 or newer.
 
 ```bash
 npm install -g github:joaomelorodrigues/synology-mcp
 synology-mcp setup --url https://nas.example.com:5001
 ```
 
-O `npm` descarrega o código já compilado, instala as dependências e cria o comando `synology-mcp`. Se o repositório for privado, o Git deste computador tem de ter acesso a ele (uma chave SSH, ou `gh auth setup-git`). Para atualizar, repete o primeiro comando: a configuração e os segredos ficam fora do pacote e mantêm-se.
+To update, run the first command again. Settings and secrets live outside the package, so they are kept.
 
-A `setup` mostra o certificado do NAS e pede para o fixar, depois pede o utilizador, a palavra-passe (invisível), o nível de permissões e o código 2FA. No fim, imprime o comando para ligar o cliente, por exemplo:
+`setup` shows the NAS's certificate and asks to pin it, then asks for the username, the password (hidden), the permission tier and the 2FA code. It finishes by printing the command that connects your client, for example:
 
 ```bash
-claude mcp add --scope user synology -- /caminho/para/node /caminho/para/dist/index.js serve
+claude mcp add --scope user synology -- /path/to/node /path/to/dist/index.js serve
 ```
 
-Para verificar a ligação e experimentar todas as ferramentas de leitura no NAS:
+To check the connection and try the read tools against your NAS:
 
 ```bash
 synology-mcp doctor
 ```
 
-O relatório não contém segredos.
+The report contains no secrets.
 
-> A porta faz parte do endereço. O DSM usa 5001 (HTTPS) e 5000 (HTTP) por omissão, e as portas 443 e 80 podem estar a servir o Web Station. Se o endereço dado não for o DSM, a `setup` experimenta as portas habituais. Vê a tua em Painel de Controlo > Portal de Início de Sessão.
+> The port is part of the address. DSM uses 5001 (HTTPS) and 5000 (HTTP) by default, and ports 443 and 80 may be serving Web Station instead. If the address you give isn't DSM, `setup` tries the usual ports. You can find yours in Control Panel > Login Portal.
 >
-> Se o NAS só for acessível por VPN, as ferramentas devolvem um erro a dizê-lo enquanto ela estiver desligada, e voltam a funcionar quando ligar.
+> If the NAS is only reachable over a VPN, tools return an error saying so while the VPN is down, and work again once it's back.
 >
-> O comando `claude mcp add` que a `setup` imprime aponta para a versão atual do Node. Se usares nvm e mudares de versão, instala outra vez e volta a correr esse comando.
+> The `claude mcp add` command that `setup` prints points at your current Node version. If you use nvm and switch versions, install again and rerun that command.
 
-## Níveis de permissões
+## Permission tiers
 
-O nível é definido em `tier`. As ferramentas acima do nível nem sequer são registadas, por isso não há como o modelo as usar por engano.
+The tier is set with `tier`. Tools above it are never registered, so the model has no way to call them by mistake.
 
-| Nível | O que permite |
+| Tier | What it allows |
 |---|---|
-| `read` (por omissão) | Só consultas |
-| `write` | Ficheiros, contentores, pacotes, tarefas e backups. Apagar pede confirmação |
-| `admin` | Também contas, shared folders, serviços, reverse proxy e `dsm_write` |
-| `allowPower: true` | À parte dos níveis: reiniciar, desligar e instalar atualizações do DSM |
+| `read` (default) | Queries only. Download tools can also save to this computer, inside `localRoots` |
+| `write` | Files, containers, packages, scheduled tasks, backups, photo albums, downloads and VMs. Deleting asks for confirmation |
+| `admin` | Also accounts, shared folders, file services, reverse proxy rules and `dsm_write` |
+| `allowPower: true` | Separate from the tiers: reboot, shut down and install DSM updates |
 
-Por mais alto que seja o nível, ficam sempre de fora os segredos (OTP, chaves de encriptação, recuperação de conta) e qualquer alteração à estrutura dos discos (criar, apagar ou reparar pools e volumes). Esses casos ficam para o DSM.
+At any tier, secrets (OTP, encryption keys, account recovery) and changes to the disk layout (creating, deleting or repairing pools and volumes) stay out of reach. Those are left to DSM itself.
 
-## Configuração
+## Configuration
 
-Ficheiro em `~/.config/synology-mcp/config.json`, sem segredos. As variáveis de ambiente têm prioridade; ver [.env.example](.env.example).
+Settings live in `~/.config/synology-mcp/config.json`, which holds no secrets. Environment variables take priority; see [.env.example](.env.example).
 
 ```json
 {
@@ -67,108 +69,108 @@ Ficheiro em `~/.config/synology-mcp/config.json`, sem segredos. As variáveis de
   "certFingerprint": "AB:CD:EF:...",
   "localRoots": ["~/Downloads"],
   "protectedPaths": ["/backups"],
-  "instructions": "Os backups estão em /backups. Confirma sempre antes de mexer em /docker."
+  "instructions": "Backups are in /backups. Always confirm before touching /docker."
 }
 ```
 
-| Campo | Efeito |
+| Field | Effect |
 |---|---|
-| `modules` | `"all"`, ou uma lista: `system`, `storage`, `files`, `docker`, `packages`, `accounts`, `services`, `security`, `network`, `backup`, `scheduler`, `photos`, `drive`, `downloads`, `vm`, `surveillance`, `generic` |
-| `localRoots` | Pastas deste computador que o upload e o download podem usar. Symlinks e `..` são resolvidos antes de verificar |
-| `protectedPaths` | Caminhos do NAS que nenhuma ferramenta altera ou apaga |
-| `instructions` | Texto extra para o modelo sobre este NAS |
-| `maxOutputChars` | Tamanho máximo de uma resposta, 40 000 por omissão |
+| `modules` | `"all"`, or a list of: `system`, `storage`, `files`, `docker`, `packages`, `accounts`, `services`, `security`, `network`, `backup`, `scheduler`, `photos`, `drive`, `downloads`, `vm`, `surveillance`, `generic` |
+| `localRoots` | Folders on this computer that upload and download tools may use. Symlinks and `..` are resolved before checking |
+| `protectedPaths` | NAS paths that no tool may change or delete |
+| `instructions` | Extra text for the model about this NAS |
+| `maxOutputChars` | Maximum size of a reply; 40,000 by default |
 
-O servidor lê a configuração ao arrancar. Depois de a alterares, reinicia o cliente MCP.
+The server reads its settings at startup, so restart your MCP client after changing them.
 
-## Ferramentas
+## Tools
 
-`synology-mcp tools --hidden` mostra as ferramentas desta ligação e o custo em contexto. Num NAS com Container Manager, Photos e Drive, mas sem Hyper Backup, Download Station, VMM nem Surveillance Station, são 57 no nível `read` (cerca de 8 mil tokens), 77 em `write` (12 mil) e 89 em `admin` (14 mil).
+`synology-mcp tools --hidden` lists this connection's tools and their context cost. On a NAS with Container Manager, Photos and Drive, but without Hyper Backup, Download Station, VMM or Surveillance Station, that is 57 tools at `read` (about 8k tokens), 77 at `write` (12k) and 89 at `admin` (14k).
 
-| Área | Leitura | Escrita |
+| Area | Read | Write |
 |---|---|---|
-| Visão geral | `nas_overview`, `nas_capabilities`, `system_info`, `system_load`, `system_processes`, `system_connections`, `system_logs`, `system_network`, `system_hardware`, `dsm_update_status` | `nas_power`, `dsm_update_install` |
-| Armazenamento | `storage_overview`, `storage_disk`, `storage_volume_usage`, `storage_schedules`, `storage_snapshots`, `iscsi_list` | |
-| Ficheiros | `files_shares`, `files_list`, `files_info`, `files_search`, `files_dir_size`, `files_md5`, `files_read`, `files_download`, `files_task_status`, `files_links` | `files_write`, `files_upload`, `files_mkdir`, `files_rename`, `files_copy_move`, `files_delete`, `files_compress`, `files_extract`, `files_task_stop`, `files_link_create`, `files_link_delete` |
+| Overview | `nas_overview`, `nas_capabilities`, `system_info`, `system_load`, `system_processes`, `system_connections`, `system_logs`, `system_network`, `system_hardware`, `dsm_update_status` | `nas_power`, `dsm_update_install` |
+| Storage | `storage_overview`, `storage_disk`, `storage_volume_usage`, `storage_schedules`, `storage_snapshots`, `iscsi_list` | |
+| Files | `files_shares`, `files_list`, `files_info`, `files_search`, `files_dir_size`, `files_md5`, `files_read`, `files_download`, `files_task_status`, `files_links` | `files_write`, `files_upload`, `files_mkdir`, `files_rename`, `files_copy_move`, `files_delete`, `files_compress`, `files_extract`, `files_task_stop`, `files_link_create`, `files_link_delete` |
 | Container Manager | `docker_containers`, `docker_container`, `docker_logs`, `docker_stats`, `docker_images`, `docker_projects`, `docker_networks`, `docker_registry_search` | `docker_container_control`, `docker_project_control`, `docker_project_save`, `docker_image_pull`, `docker_delete` |
-| Pacotes | `packages_list` | `package_control` |
-| Contas e shares | `users_list`, `groups_list`, `shares_list`, `share_nfs_rules` | `user_create`, `user_update`, `user_delete`, `user_groups_set`, `user_share_permission_set`, `share_create`, `share_delete`, `share_nfs_rule_set` |
-| Serviços e segurança | `services_status`, `security_overview`, `security_certificates`, `security_login_activity` | `service_set` |
-| Rede | `network_services`, `reverse_proxy_list` | `reverse_proxy_create`, `reverse_proxy_delete` |
-| Tarefas e backups | `scheduler_tasks`, `backup_tasks` | `scheduler_run`, `backup_run` |
-| Photos e Drive | `photos_collections`, `photos_items`, `photos_search`, `photos_download`, `drive_status`, `drive_list`, `drive_search`, `drive_labels` | `photos_album_create`, `photos_album_add` |
+| Packages | `packages_list` | `package_control` |
+| Accounts and shares | `users_list`, `groups_list`, `shares_list`, `share_nfs_rules` | `user_create`, `user_update`, `user_delete`, `user_groups_set`, `user_share_permission_set`, `share_create`, `share_delete`, `share_nfs_rule_set` |
+| Services and security | `services_status`, `security_overview`, `security_certificates`, `security_login_activity` | `service_set` |
+| Network | `network_services`, `reverse_proxy_list` | `reverse_proxy_create`, `reverse_proxy_delete` |
+| Tasks and backups | `scheduler_tasks`, `backup_tasks` | `scheduler_run`, `backup_run` |
+| Photos and Drive | `photos_collections`, `photos_items`, `photos_search`, `photos_download`, `drive_status`, `drive_list`, `drive_search`, `drive_labels` | `photos_album_create`, `photos_album_add` |
 | Download Station, VMM, Surveillance | `downloads_list`, `vm_list`, `surveillance_cameras` | `download_add`, `download_control`, `vm_control` |
-| Qualquer API | `dsm_api_search`, `dsm_read` | `dsm_write` |
+| Any API | `dsm_api_search`, `dsm_read` | `dsm_write` |
 
-As ferramentas de um pacote que não esteja instalado ficam escondidas. Aparecem sozinhas quando o instalares e reiniciares o cliente.
+Tools for a package that isn't installed stay hidden. They appear once you install it and restart your client.
 
-## Como funciona o 2FA
+## How 2FA works
 
-1. A `setup` faz login com palavra-passe e código, e pede ao DSM um token de dispositivo de confiança.
-2. A palavra-passe e o token ficam no Keychain do macOS (noutros sistemas, num ficheiro com permissão `600`).
-3. Os logins seguintes usam o token, sem código.
+1. `setup` logs in with your password and a code, and asks DSM for a trusted-device token.
+2. The password and token are stored in the macOS Keychain (on other systems, in a file with mode `600`).
+3. Later logins use the token, with no code.
 
-Este computador aparece em **DSM > Pessoal > Segurança > Dispositivos com sessão iniciada** como `synology-mcp`. Se removeres esse dispositivo, o erro seguinte diz o que fazer: ou dás um código ao modelo, que chama `nas_auth_otp`, ou voltas a correr a `setup`.
+If you remove the trusted device in DSM (Personal > Security > Sign-in Activity), the next error says what to do: either give the model a current code, which it passes to `nas_auth_otp`, or run `setup` again.
 
-## Segurança
+## Security
 
-- A palavra-passe e o token vão sempre no corpo de um POST, nunca num URL, e nunca são escritos em respostas ou registos.
-- As variáveis de ambiente dos contentores e os ficheiros Compose podem ter segredos, por isso só são devolvidos quando pedidos explicitamente. `dsm_read` esconde campos com nomes como `password` ou `token`.
-- Conteúdo vindo do NAS (ficheiros, nomes, registos) pode ter texto escrito por qualquer pessoa. As instruções do servidor dizem ao modelo para o tratar como dados.
-- `files_delete` e `files_copy_move` recusam um shared folder inteiro, porque no DSM isso apaga o próprio shared folder, sem passar pela reciclagem. Para isso existe `share_delete`, que exige escrever o nome.
-- `tier: read` é o nível por omissão. Se usares uma conta DSM dedicada com menos privilégios, os limites do próprio DSM aplicam-se por cima destes.
+- The password and token always travel in a POST body, never in a URL, and are never written to replies or logs.
+- Container environment variables and Compose files can hold secrets, so they are returned only when explicitly requested. `dsm_read` hides fields with names like `password` or `token`.
+- Content from the NAS (files, names, logs) can contain text written by anyone. The server's instructions tell the model to treat it as data.
+- `files_delete`, `files_rename` and moves through `files_copy_move` refuse a whole shared folder, because in DSM that removes the shared folder itself, beyond its recycle bin. `share_delete` does that on purpose, and requires typing the name back.
+- `read` is the default tier. If you use a dedicated DSM account with fewer privileges, DSM's own limits apply on top of these.
 
-Se substituíres o certificado do NAS, a ligação passa a ser recusada até correres `synology-mcp trust-cert`. É intencional: de outro lado do erro pode estar alguém a intercetar a ligação.
+If you replace the NAS's certificate, connections are refused until you run `synology-mcp trust-cert`. This is deliberate: someone intercepting the connection would cause the same error.
 
-## Correr noutra máquina, por HTTP
+## Running on another machine over HTTP
 
-Por omissão, o cliente arranca o servidor localmente por stdio. Para o manter sempre ligado, por exemplo no próprio NAS:
+By default the client starts the server locally over stdio, so you don't need to host it. To keep it always on, for example on the NAS itself:
 
 ```bash
 docker compose run --rm -it synology-mcp setup --url https://nas.example.com:5001
 SYNOLOGY_MCP_TOKEN=$(openssl rand -hex 32) docker compose up -d
 ```
 
-O endpoint é `http://127.0.0.1:8765/mcp`. Fora do loopback, o servidor recusa arrancar sem `SYNOLOGY_MCP_TOKEN` e `SYNOLOGY_MCP_ALLOWED_HOSTS`. Para o expor, coloca à frente um reverse proxy HTTPS. Quem chegar a este endpoint com o token faz tudo o que o nível configurado permitir.
+The endpoint is `http://127.0.0.1:8765/mcp`. Beyond loopback, the server refuses to start without `SYNOLOGY_MCP_TOKEN` and `SYNOLOGY_MCP_ALLOWED_HOSTS`. To expose it, put an HTTPS reverse proxy in front. Anyone who reaches this endpoint with the token can do whatever the configured tier allows.
 
-## Resolução de problemas
+## Troubleshooting
 
-| Sintoma | O que fazer |
+| Symptom | What to do |
 |---|---|
-| `answered, but not as DSM's Web API` | Falta a porta do DSM no URL (Painel de Controlo > Portal de Início de Sessão) |
-| `Could not reach the NAS` | Confirma a VPN |
-| `different TLS certificate` | Se substituíste o certificado, `trust-cert`. Se não, não avances |
-| `DSM refused the login` | Corrige na `setup`. O servidor não volta a tentar até as credenciais mudarem ou reiniciar |
-| `blocked by DSM Auto Block` | Remove o IP em Painel de Controlo > Segurança > Proteção e reinicia o servidor |
-| `permission_denied` (105) | A maioria das APIs de sistema e armazenamento exige uma conta de administrador |
-| Uma ferramenta não aparece | Pede ao modelo `nas_capabilities`, que diz porque está escondida |
+| `answered, but not as DSM's Web API` | The URL is missing the DSM port (Control Panel > Login Portal) |
+| `Could not reach the NAS` | Check the network or VPN path to the NAS |
+| `different TLS certificate` | If you replaced the certificate, run `trust-cert`. If you didn't, stop there |
+| `DSM refused the login` | Fix it with `setup`. The server won't try again until the credentials change or it restarts |
+| `blocked by DSM Auto Block` | Remove the IP in Control Panel > Security > Protection, then restart the server |
+| `permission_denied` (105) | Most system and storage APIs need an administrator account |
+| A tool doesn't appear | Ask the model to call `nas_capabilities`, which says why it's hidden |
 
-## Desenvolvimento
+## Development
 
 ```bash
 git clone https://github.com/joaomelorodrigues/synology-mcp.git
 cd synology-mcp
 npm install
-npm test                         # compila e corre os testes contra um DSM falso, por HTTP real
-TEST_KEYCHAIN=1 npm test         # inclui o Keychain real, com um item temporário
+npm test                         # compiles, then tests against a fake DSM over real HTTP
+TEST_KEYCHAIN=1 npm test         # also tests the real Keychain, with a temporary item
 npm run typecheck
 ```
 
-O `dist/` está no repositório porque é ele que o `npm install -g` instala. Com `-g`, um pacote vindo de git com um script chamado `build`, `prepare`, `prepack`, `preinstall`, `install` ou `postinstall` fica instalado como link para uma pasta temporária já apagada, por isso o script de compilação chama-se `compile`. Depois de alterar `src/`, corre `npm run compile` e inclui o `dist/` no commit. A verificação do GitHub Actions falha se te esqueceres.
+`dist/` is committed because it is what `npm install -g` installs. With `-g`, a package from git that has a script named `build`, `prepare`, `prepack`, `preinstall`, `install` or `postinstall` ends up as a symlink to a temporary folder npm has already deleted, which is why the compile script is called `compile`. After changing `src/`, run `npm run compile` and include `dist/` in the commit. The GitHub Actions check fails if you forget.
 
-O código está dividido em `src/dsm` (cliente DSM: sessão, TLS, erros), `src/mcp` (registo de ferramentas, formatos, guardas de caminhos, transporte HTTP), `src/tools` (ferramentas por área) e `src/cli` (`setup`, `doctor`, `tools`). Para acrescentar uma ferramenta, junta um `tool({...})` em `src/tools` com o nível e as APIs de que depende.
+The code is split into `src/dsm` (DSM client: session, TLS, errors), `src/mcp` (tool registry, output formats, path guards, HTTP transport), `src/tools` (tools by area) and `src/cli` (`setup`, `doctor`, `tools`). To add a tool, add a `tool({...})` in `src/tools` with its tier and the APIs it depends on.
 
-### Estado da verificação
+### Verification status
 
-Os testes cobrem o comportamento do servidor contra um DSM simulado. Num NAS real, só se confirmou a descoberta das APIs e a fixação do certificado, sem login. O formato das chamadas vem dos projetos de referência abaixo, que as testaram em DSM 7.x, mas falta confirmá-lo com login:
+The tests cover the server's behavior against a simulated DSM. On a real NAS, only API discovery and certificate pinning have been confirmed, without logging in. The shape of the calls comes from the reference projects below, which tested them on DSM 7.x, but it still needs confirming with a login:
 
-- As ferramentas de leitura confirmam-se com `doctor`. Algumas não têm equivalente nas referências, por isso são as primeiras a vigiar: `security_login_activity`, `drive_labels`, `photos_items` sem origem.
-- As ferramentas de escrita só se confirmam a usá-las. Experimenta-as primeiro com dados sem importância, sobretudo `files_compress`, que também não tem equivalente nas referências.
+- Read tools can be confirmed with `doctor`. Some have no equivalent in the references, so watch those first: `security_login_activity`, `drive_labels`, and `photos_items` with no source given.
+- Write tools can only be confirmed by using them. Try them on unimportant data first, especially `files_compress`, which also has no equivalent in the references.
 
-### Referências
+### References
 
-As convenções da API DSM foram estudadas nestes projetos: [cmeans/mcp-synology](https://github.com/cmeans/mcp-synology), [rafalr100/synology-mcp](https://github.com/rafalr100/synology-mcp), [atom2ueki/mcp-server-synology](https://github.com/atom2ueki/mcp-server-synology) e [vocweb/synology-mcp-server](https://github.com/vocweb/synology-mcp-server). O código aqui é próprio.
+The DSM API conventions were learned from these projects: [cmeans/mcp-synology](https://github.com/cmeans/mcp-synology), [rafalr100/synology-mcp](https://github.com/rafalr100/synology-mcp), [atom2ueki/mcp-server-synology](https://github.com/atom2ueki/mcp-server-synology) and [vocweb/synology-mcp-server](https://github.com/vocweb/synology-mcp-server). The code here is original.
 
-## Licença
+## License
 
-[MIT](LICENSE). Não afiliado à Synology Inc.
+[MIT](LICENSE). Not affiliated with Synology Inc.
