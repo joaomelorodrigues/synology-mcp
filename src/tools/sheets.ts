@@ -1,7 +1,9 @@
 /**
- * Editing .osheet files in place, through Synology's official Spreadsheet REST API. It runs in the
+ * Editing .osheet files in place, through Synology's Spreadsheet API 3.4.1. It runs in the
  * separate synology/spreadsheet-api container, so these tools stay hidden until that is set up.
- * Request shapes follow the API as vocweb/synology-mcp-server implements it (OpenAPI 3.4.1).
+ * Paths and bodies match the published OpenAPI: values, styles, tabs, create, xlsx/csv export
+ * and batchUpdate (insert or delete rows and columns). The admin metrics endpoints are omitted:
+ * they return Prometheus text and need a separate token.
  */
 
 import { existsSync, statSync } from 'node:fs';

@@ -7,7 +7,6 @@ import { parseArgs } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { loadConfig } from '../config.js';
-import { q } from '../dsm/client.js';
 import { buildServer, chooseTools } from '../mcp/server.js';
 import { createRuntime } from '../runtime.js';
 
@@ -120,7 +119,7 @@ export async function runDoctor(argv: string[]): Promise<number> {
     samples.docker_logs = { name: container, limit: 3 };
   }
 
-  const office = await client.tryCall('SYNO.SynologyDrive.Files', 'search', { keyword: q('.osheet'), path: '/mydrive', limit: 1 }, { version: 2 });
+  const office = await client.tryCall('SYNO.SynologyDrive.Files', 'search', { keyword: '.osheet', location: 'mydrive', limit: 1 }, { version: 11, quoteStrings: true });
   const sheet: string | undefined = office.ok ? office.data.items?.[0]?.permanent_link : undefined;
   samples.office_lookup = { kind: 'locales' };
   if (sheet) {

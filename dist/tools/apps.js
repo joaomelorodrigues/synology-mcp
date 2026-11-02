@@ -195,8 +195,41 @@ export const photoTools = [
 ];
 // ------------------------------------------------------------------ Drive
 const FILES = 'SYNO.SynologyDrive.Files';
-const DRIVE_VERSION = 2;
-function driveFileView(file) {
+/** Drive API 2 calls SYNO.SynologyDrive.Files at version 11. Older NAS builds clamp this. */
+const DRIVE_VERSION = 11;
+/** A Drive path or an id: or link: reference, as the Drive file APIs address files. */
+export function drivePath(input) {
+    const value = input.trim();
+    if (!value)
+        throw new DsmError('The path is empty.', { kind: 'invalid_parameter' });
+    if (value.startsWith('/'))
+        return normalizeNasPath(value);
+    if (/^(id|link):./.test(value))
+        return value;
+    throw new DsmError(`"${input}" is not a Drive path or an id: or link: reference.`, {
+        kind: 'invalid_parameter',
+        hint: 'Use /mydrive/..., /team-folders/<name>/..., or an id from drive_list.',
+    });
+}
+/** Search location: a folder path, or mydrive, team_folders, shared_with_me, shared_with_others, starred, any. */
+export function driveLocation(input) {
+    const value = input.trim();
+    if (value === '/mydrive' || value === 'mydrive')
+        return 'mydrive';
+    if (value === '/team-folders' || value === 'team_folders')
+        return 'team_folders';
+    if (value.startsWith('/'))
+        return normalizeNasPath(value);
+    return value;
+}
+function driveSort(value) {
+    if (value === 'modified')
+        return 'modified_time';
+    if (value === 'created')
+        return 'created_time';
+    return value;
+}
+export function driveFileView(file) {
     return {
         id: file.file_id ?? file.id,
         link_id: file.permanent_link,
@@ -207,6 +240,7 @@ function driveFileView(file) {
         modified: isoTime(file.modified_time),
         owner: file.owner?.name ?? file.owner,
         shared: file.shared || undefined,
+        starred: file.starred || undefined,
     };
 }
 export const driveTools = [
@@ -219,7 +253,7 @@ export const driveTools = [
         requiresAny: ['SYNO.SynologyDrive.Connection', 'SYNO.SynologyDrive.TeamFolders'],
         handler: async (_args, { client, signal }) => {
             const [connections, team] = await Promise.all([
-                client.tryCall('SYNO.SynologyDrive.Connection', 'list', {}, { version: 1, signal }),
+                client.tryCall('SYNO.SynologyDrive.Connection', 'list', {}, { version: 2, quoteStrings: true, signal }),
                 client.tryCall('SYNO.SynologyDrive.TeamFolders', 'list', { offset: 0, limit: 500 }, { version: 1, signal }),
             ]);
             return {
@@ -246,13 +280,13 @@ export const driveTools = [
         requires: [FILES],
         input: {
             path: z.string().default('/mydrive'),
-            sort_by: z.enum(['name', 'size', 'modified', 'created']).default('name'),
+            sort_by: z.enum(['name', 'size', 'owner', 'type', 'modified_time', 'modified', 'created_time', 'created']).default('name'),
             descending: z.boolean().default(false),
             offset: z.number().int().min(0).default(0),
             limit: z.number().int().min(1).max(1000).default(100),
         },
         handler: async ({ path, sort_by, descending, offset, limit }, { client, signal }) => {
-            const data = await client.call(FILES, 'list', { path: normalizeNasPath(path), sort_by, sort_direction: descending ? 'DESC' : 'ASC', offset, limit }, { version: DRIVE_VERSION, signal });
+            const data = await client.call(FILES, 'list', { path: drivePath(path), sort_by: driveSort(sort_by), sort_direction: descending ? 'desc' : 'asc', offset, limit }, { version: DRIVE_VERSION, quoteStrings: true, signal });
             const files = asList(data.items).map(driveFileView);
             const total = Number(data.total ?? files.length);
             return { path, total, offset, next_offset: offset + files.length < total ? offset + files.length : undefined, files };
@@ -261,7 +295,7 @@ export const driveTools = [
     tool({
         name: 'drive_search',
         title: 'Search Drive',
-        description: 'Search Synology Drive by keyword under a folder.',
+        description: 'Search Synology Drive by keyword. path is a folder, or a location: mydrive, team_folders, shared_with_me, shared_with_others, starred, any.',
         module: 'drive',
         tier: 'read',
         requires: [FILES],
@@ -271,7 +305,7 @@ export const driveTools = [
             limit: z.number().int().min(1).max(500).default(50),
         },
         handler: async ({ keyword, path, limit }, { client, signal }) => {
-            const data = await client.call(FILES, 'search', { keyword: q(keyword), path: normalizeNasPath(path), limit }, { version: DRIVE_VERSION, signal });
+            const data = await client.call(FILES, 'search', { keyword, location: driveLocation(path), limit }, { version: DRIVE_VERSION, quoteStrings: true, signal });
             return { total: data.total, files: asList(data.items).map(driveFileView) };
         },
     }),
@@ -283,7 +317,7 @@ export const driveTools = [
         tier: 'read',
         requires: ['SYNO.SynologyDrive.Labels'],
         handler: async (_args, { client, signal }) => {
-            const data = await client.call('SYNO.SynologyDrive.Labels', 'list', {}, { version: 1, signal });
+            const data = await client.call('SYNO.SynologyDrive.Labels', 'list', {}, { version: 3, quoteStrings: true, signal });
             return { labels: asList(data.items ?? data.labels) };
         },
     }),

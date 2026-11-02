@@ -66,7 +66,7 @@ export function renderError(error) {
     return JSON.stringify({ error: error.toJSON() });
 }
 /** Keys whose values should never reach a model or a log, whatever API they came from. */
-const SECRET_KEY = /^(pass(word|wd|phrase)?|secret|token|api_?key|private_?key|credentials?|sid|did|synotoken|otp(_code)?|smtp_pass|auth_key|chap_password|mutual_password)$/i;
+const SECRET_KEY = /^(pass(word|wd|phrase)?|protect_password|secret|token|api_?key|private_?key|credentials?|sid|did|synotoken|otp(_code)?|smtp_pass|auth_key|chap_password|mutual_password)$/i;
 export function redactSecrets(value) {
     if (Array.isArray(value))
         return value.map(redactSecrets);

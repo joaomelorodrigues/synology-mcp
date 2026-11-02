@@ -22,6 +22,8 @@ export const MODULES = [
     'photos',
     'drive',
     'office',
+    'mail',
+    'calendar',
     'downloads',
     'vm',
     'surveillance',
