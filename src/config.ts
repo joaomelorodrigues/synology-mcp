@@ -25,6 +25,7 @@ export const MODULES = [
   'scheduler',
   'photos',
   'drive',
+  'office',
   'downloads',
   'vm',
   'surveillance',
@@ -53,6 +54,14 @@ const fileSchema = z.strictObject({
   /** Session name sent at login. DSM refuses names it doesn't know for non-administrators (402). */
   sessionName: z.string().min(1).optional(),
   maxOutputChars: z.number().int().min(1000).max(2_000_000).optional(),
+  /** Where the synology/spreadsheet-api container listens. Enables the sheet_* tools. */
+  spreadsheetApiUrl: z.url().optional(),
+  /** host:port the container uses to reach DSM. Defaults to the NAS address in `url`. */
+  spreadsheetDsmHost: z.string().min(1).optional(),
+  spreadsheetDsmProtocol: z.enum(['http', 'https']).optional(),
+  /** A separate DSM account for the container, needed when the main one uses 2FA. */
+  spreadsheetUsername: z.string().min(1).optional(),
+  spreadsheetCertFingerprint: z.string().optional(),
   /** Extra guidance prepended to the server's instructions. */
   instructions: z.string().optional(),
 });
@@ -73,6 +82,11 @@ export interface Config {
   deviceName: string;
   sessionName: string;
   maxOutputChars: number;
+  spreadsheetApiUrl?: string;
+  spreadsheetDsmHost?: string;
+  spreadsheetDsmProtocol?: 'http' | 'https';
+  spreadsheetUsername?: string;
+  spreadsheetCertFingerprint?: string;
   instructions?: string;
   /** Where the file was read from, or would be written to. */
   configPath: string;
@@ -185,6 +199,11 @@ export function loadConfig(options: { path?: string; env?: NodeJS.ProcessEnv; al
     deviceName: env.SYNOLOGY_DEVICE_NAME ?? file.deviceName ?? 'synology-mcp',
     sessionName: env.SYNOLOGY_SESSION_NAME ?? file.sessionName ?? 'webui',
     maxOutputChars: env.SYNOLOGY_MAX_OUTPUT_CHARS ? Number(env.SYNOLOGY_MAX_OUTPUT_CHARS) : (file.maxOutputChars ?? 40_000),
+    spreadsheetApiUrl: (env.SYNOLOGY_SPREADSHEET_URL ?? file.spreadsheetApiUrl)?.replace(/\/+$/, ''),
+    spreadsheetDsmHost: env.SYNOLOGY_SPREADSHEET_DSM_HOST ?? file.spreadsheetDsmHost,
+    spreadsheetDsmProtocol: (env.SYNOLOGY_SPREADSHEET_DSM_PROTOCOL as 'http' | 'https' | undefined) ?? file.spreadsheetDsmProtocol,
+    spreadsheetUsername: env.SYNOLOGY_SPREADSHEET_USERNAME ?? file.spreadsheetUsername,
+    spreadsheetCertFingerprint: env.SYNOLOGY_SPREADSHEET_CERT_FINGERPRINT ?? file.spreadsheetCertFingerprint,
     instructions: file.instructions,
     configPath,
   };

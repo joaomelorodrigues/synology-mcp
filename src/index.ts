@@ -5,12 +5,12 @@ import { parseArgs } from 'node:util';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { runDoctor } from './cli/doctor.js';
 import { runSetup, runTrustCert } from './cli/setup.js';
+import { runSpreadsheetSetup } from './cli/spreadsheet-setup.js';
 import { runToolsReport } from './cli/tools.js';
-import { ConfigError, instanceKey, loadConfig } from './config.js';
-import { CredentialProvider } from './credentials.js';
-import { DsmClient } from './dsm/client.js';
+import { ConfigError, loadConfig } from './config.js';
 import { serveHttp } from './mcp/http.js';
 import { buildServer, chooseTools } from './mcp/server.js';
+import { createRuntime } from './runtime.js';
 
 const USAGE = `synology-mcp: MCP server for a Synology NAS
 
@@ -18,6 +18,7 @@ const USAGE = `synology-mcp: MCP server for a Synology NAS
   synology-mcp doctor      Check the connection and try every read tool against the NAS
   synology-mcp tools       List the tools this connection would expose, with their context cost
   synology-mcp trust-cert  Pin the NAS's current certificate after replacing it
+  synology-mcp spreadsheet-setup  Connect the Spreadsheet API container, to edit .osheet cells
   synology-mcp serve       Run the MCP server on stdio (the default)
   synology-mcp serve --http [--host 127.0.0.1] [--port 8765]
 
@@ -35,8 +36,8 @@ async function serve(argv: string[]): Promise<void> {
     },
   });
   const config = loadConfig({ path: values.config });
-  const credentials = new CredentialProvider(instanceKey(config.url), config.username);
-  const client = new DsmClient(config, credentials);
+  const runtime = createRuntime(config);
+  const { client, credentials, spreadsheet } = runtime;
   const selection = await chooseTools(client, config);
   if (config.insecureTls) process.stderr.write('synology-mcp: TLS verification is OFF (insecureTls). Prefer a pinned certificate: run setup.\n');
   if (config.url.startsWith('http:')) process.stderr.write('synology-mcp: plain HTTP: the password crosses the network unencrypted.\n');
@@ -45,7 +46,7 @@ async function serve(argv: string[]): Promise<void> {
   const shutdown = async (): Promise<void> => {
     if (closing) return;
     closing = true;
-    await client.close().catch(() => undefined);
+    await runtime.close().catch(() => undefined);
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown());
@@ -53,7 +54,7 @@ async function serve(argv: string[]): Promise<void> {
 
   if (values.http) {
     const list = (value: string | undefined): string[] => (value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-    serveHttp(() => buildServer({ client, config, credentials }, selection), {
+    serveHttp(() => buildServer({ client, config, credentials, spreadsheet }, selection), {
       host: values.host,
       port: Number(values.port),
       path: values.path,
@@ -64,7 +65,7 @@ async function serve(argv: string[]): Promise<void> {
     return;
   }
 
-  const server = buildServer({ client, config, credentials }, selection);
+  const server = buildServer({ client, config, credentials, spreadsheet }, selection);
   const transport = new StdioServerTransport();
   transport.onclose = () => void shutdown();
   process.stdin.on('end', () => void shutdown());
@@ -85,6 +86,9 @@ async function main(): Promise<void> {
       break;
     case 'trust-cert':
       await runTrustCert(rest);
+      break;
+    case 'spreadsheet-setup':
+      await runSpreadsheetSetup(rest);
       break;
     case 'doctor':
       process.exitCode = await runDoctor(rest);

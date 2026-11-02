@@ -3,6 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Config } from '../src/config.js';
 import { CredentialProvider, type SecretName, type SecretStore } from '../src/credentials.js';
 import { DsmClient } from '../src/dsm/client.js';
+import { buildSpreadsheetClient } from '../src/runtime.js';
 import { buildServer, chooseTools } from '../src/mcp/server.js';
 import type { FakeDsm } from './fake-dsm.js';
 
@@ -63,7 +64,8 @@ export async function connect(fake: FakeDsm, overrides: Partial<Config> = {}, se
   const credentials = new CredentialProvider(instance, config.username, store, {});
   const client = new DsmClient(config, credentials, false);
   const selection = await chooseTools(client, config);
-  const server = buildServer({ client, config, credentials }, selection);
+  const spreadsheet = buildSpreadsheetClient(config, credentials);
+  const server = buildServer({ client, config, credentials, spreadsheet }, selection);
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.connect(serverSide);
   const mcp = new Client({ name: 'test', version: '1.0.0' });
@@ -87,6 +89,7 @@ export async function connect(fake: FakeDsm, overrides: Partial<Config> = {}, se
     toolNames: async () => (await mcp.listTools()).tools.map((t) => t.name),
     close: async () => {
       await mcp.close();
+      await spreadsheet?.close();
       await client.close();
     },
   };

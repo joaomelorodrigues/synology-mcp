@@ -1,0 +1,19 @@
+# Synology's official Spreadsheet API, needed only to edit .osheet cells in place (the sheet_* tools).
+#
+# With Portainer: Stacks > Add stack, paste this file, and set AUTH_SECRET under environment
+# variables, for example to the output of: openssl rand -hex 32
+# Without it: AUTH_SECRET=$(openssl rand -hex 32) docker compose -f docker-compose.spreadsheet.yml up -d
+#
+# Then run: synology-mcp spreadsheet-setup
+#
+# The tag must match your Synology Office: 3.4.x for Office 3.7.0 or later, 3.3.x for Office 3.6.x.
+# Synology advises against running this on the same DSM as Office when many spreadsheets are active,
+# since each open spreadsheet gets its own worker.
+services:
+  spreadsheet-api:
+    image: synology/spreadsheet-api:3.4.1
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET to a long random value}

@@ -130,6 +130,18 @@ export class CredentialProvider {
         const deviceId = this.env.SYNOLOGY_DEVICE_ID || (await this.lookup('device_id'));
         return { username, password, deviceId };
     }
+    /** The login for the Spreadsheet API container: its own account if set, else the main one. */
+    async resolveSpreadsheet(dedicatedUsername) {
+        if (dedicatedUsername) {
+            const password = this.env.SYNOLOGY_SPREADSHEET_PASSWORD || (await this.lookup('spreadsheet_password'));
+            return password ? { username: dedicatedUsername, password } : undefined;
+        }
+        const main = await this.resolve();
+        return main ? { username: main.username, password: main.password } : undefined;
+    }
+    saveSpreadsheetPassword(value) {
+        return this.store.set(this.instance, 'spreadsheet_password', value);
+    }
     async sources() {
         return {
             password: this.env.SYNOLOGY_PASSWORD ? 'env' : (await this.lookup('password')) ? 'store' : 'missing',

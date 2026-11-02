@@ -26,7 +26,7 @@ const COMMON_PORTS: readonly [string, number][] = [
   ['http', 5003],
 ];
 
-function askHidden(prompt: string): Promise<string> {
+export function askHidden(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!input.isTTY) {
       reject(new Error('A password prompt needs a terminal. Use --password-stdin to pipe it.'));
@@ -61,7 +61,7 @@ function askHidden(prompt: string): Promise<string> {
   });
 }
 
-async function readAllStdin(): Promise<string> {
+export async function readAllStdin(): Promise<string> {
   let data = '';
   input.setEncoding('utf8');
   for await (const chunk of input) data += chunk;

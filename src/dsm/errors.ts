@@ -235,12 +235,21 @@ const FOTO: Record<number, CodeInfo> = {
   803: { kind: 'permission_denied', message: 'No permission for this Shared Space folder' },
 };
 
+/** Synology Office codes, as its own web client handles them. */
+const OFFICE: Record<number, CodeInfo> = {
+  57373: { kind: 'permission_denied', message: 'This document is encrypted and needs its password', hint: 'Pass password.' },
+  57383: { kind: 'permission_denied', message: 'This account cannot read this document' },
+  57402: { kind: 'already_exists', message: 'A version with this name already exists', hint: 'Pass overwrite=true to reuse the name.' },
+  57403: { kind: 'not_supported', message: 'The document format and this Synology Office version do not match', hint: 'Check for a Synology Office update in Package Center.' },
+};
+
 function lookup(api: string, code: number): CodeInfo | undefined {
   let family: Record<number, CodeInfo> | undefined;
   if (api === 'SYNO.API.Auth') family = AUTH;
   else if (api.startsWith('SYNO.FileStation')) family = FILESTATION;
   else if (api.startsWith('SYNO.DownloadStation')) family = DOWNLOADSTATION;
   else if (api.startsWith('SYNO.Foto')) family = FOTO;
+  else if (api.startsWith('SYNO.Office') || api.startsWith('SYNO.SynologyDrive')) family = OFFICE;
   else if (api.startsWith('SYNO.Core') || api.startsWith('SYNO.Storage')) family = CORE;
   return family?.[code] ?? COMMON[code];
 }

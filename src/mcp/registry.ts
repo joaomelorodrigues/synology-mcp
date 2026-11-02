@@ -13,6 +13,7 @@ import type { Config, ModuleName, Tier } from '../config.js';
 import { TIERS } from '../config.js';
 import type { CredentialProvider } from '../credentials.js';
 import type { DsmClient } from '../dsm/client.js';
+import type { SpreadsheetClient } from '../dsm/spreadsheet.js';
 import { DsmError } from '../dsm/errors.js';
 import { renderError, renderResult } from './format.js';
 
@@ -22,6 +23,8 @@ export interface ToolContext {
   client: DsmClient;
   config: Config;
   credentials: CredentialProvider;
+  /** Present only when the Spreadsheet API container is configured. */
+  spreadsheet?: SpreadsheetClient;
   signal: AbortSignal;
   /** Report progress to the client, keeping long calls from hitting its idle timeout. */
   progress(done: number, total?: number, message?: string): Promise<void>;
@@ -44,6 +47,8 @@ export interface ToolDef {
   idempotent?: boolean;
   /** Reads the NAS but writes on this machine, so clients should not treat it as read-only. */
   localWrite?: boolean;
+  /** Works through the separate Spreadsheet API container rather than DSM. */
+  needsSpreadsheetApi?: boolean;
   handler(args: any, context: ToolContext): Promise<unknown>;
 }
 
@@ -60,7 +65,7 @@ export function tool<S extends z.ZodRawShape>(
 export interface HiddenTool {
   name: string;
   module: ModuleName;
-  reason: 'tier' | 'power' | 'module' | 'package';
+  reason: 'tier' | 'power' | 'module' | 'package' | 'config';
   detail: string;
 }
 
@@ -86,6 +91,8 @@ export function selectTools(defs: readonly ToolDef[], config: Config, has: (api:
       else hide('power', 'needs allowPower: true');
     } else if (tierRank(def.tier) > tierRank(config.tier)) {
       hide('tier', `needs tier "${def.tier}" (this connection is "${config.tier}")`);
+    } else if (def.needsSpreadsheetApi && !config.spreadsheetApiUrl) {
+      hide('config', 'needs the Spreadsheet API container; see `synology-mcp spreadsheet-setup`');
     } else if (def.requires && !def.requires.every(has)) {
       hide('package', `NAS lacks ${def.requires.filter((api) => !has(api)).join(', ')}`);
     } else if (def.requiresAny && !def.requiresAny.some(has)) {
@@ -103,6 +110,7 @@ export interface RegisterDeps {
   client: DsmClient;
   config: Config;
   credentials: CredentialProvider;
+  spreadsheet?: SpreadsheetClient;
 }
 
 export function registerTools(server: McpServer, selection: Selection, deps: RegisterDeps): void {

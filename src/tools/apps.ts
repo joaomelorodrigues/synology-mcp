@@ -216,6 +216,7 @@ const DRIVE_VERSION = 2;
 function driveFileView(file: any): Record<string, unknown> {
   return {
     id: file.file_id ?? file.id,
+    link_id: file.permanent_link,
     path: file.display_path ?? file.path,
     name: file.name,
     type: file.type ?? (file.content_type === 'dir' ? 'dir' : undefined),

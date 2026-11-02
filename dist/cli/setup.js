@@ -22,7 +22,7 @@ const COMMON_PORTS = [
     ['http', 5000],
     ['http', 5003],
 ];
-function askHidden(prompt) {
+export function askHidden(prompt) {
     return new Promise((resolve, reject) => {
         if (!input.isTTY) {
             reject(new Error('A password prompt needs a terminal. Use --password-stdin to pipe it.'));
@@ -59,7 +59,7 @@ function askHidden(prompt) {
         input.on('data', onData);
     });
 }
-async function readAllStdin() {
+export async function readAllStdin() {
     let data = '';
     input.setEncoding('utf8');
     for await (const chunk of input)

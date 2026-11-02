@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const SERVICE_PREFIX = 'synology-mcp';
 
-export type SecretName = 'password' | 'device_id';
+export type SecretName = 'password' | 'device_id' | 'spreadsheet_password';
 
 export interface Credentials {
   username: string;
@@ -160,6 +160,20 @@ export class CredentialProvider {
     if (!username || !password) return undefined;
     const deviceId = this.env.SYNOLOGY_DEVICE_ID || (await this.lookup('device_id'));
     return { username, password, deviceId };
+  }
+
+  /** The login for the Spreadsheet API container: its own account if set, else the main one. */
+  async resolveSpreadsheet(dedicatedUsername?: string): Promise<{ username: string; password: string } | undefined> {
+    if (dedicatedUsername) {
+      const password = this.env.SYNOLOGY_SPREADSHEET_PASSWORD || (await this.lookup('spreadsheet_password'));
+      return password ? { username: dedicatedUsername, password } : undefined;
+    }
+    const main = await this.resolve();
+    return main ? { username: main.username, password: main.password } : undefined;
+  }
+
+  saveSpreadsheetPassword(value: string): Promise<void> {
+    return this.store.set(this.instance, 'spreadsheet_password', value);
   }
 
   async sources(): Promise<CredentialSources> {

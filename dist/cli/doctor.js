@@ -5,12 +5,12 @@
 import { parseArgs } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { instanceKey, loadConfig } from '../config.js';
-import { CredentialProvider } from '../credentials.js';
-import { DsmClient } from '../dsm/client.js';
+import { loadConfig } from '../config.js';
+import { q } from '../dsm/client.js';
 import { buildServer, chooseTools } from '../mcp/server.js';
+import { createRuntime } from '../runtime.js';
 /** Read tools the doctor leaves out: they need a real file or a 2FA code, or write locally. */
-const SKIP = new Set(['nas_auth_otp', 'dsm_read', 'files_read', 'files_download', 'photos_download']);
+const SKIP = new Set(['nas_auth_otp', 'dsm_read', 'files_read', 'files_download', 'photos_download', 'office_export', 'office_media_download', 'sheet_export']);
 export async function runDoctor(argv) {
     const { values } = parseArgs({
         args: argv,
@@ -25,8 +25,8 @@ export async function runDoctor(argv) {
             process.stdout.write(`${line}\n`);
     };
     const config = loadConfig({ path: values.config });
-    const credentials = new CredentialProvider(instanceKey(config.url), config.username);
-    const client = new DsmClient(config, credentials);
+    const runtime = createRuntime(config);
+    const { client, credentials, spreadsheet } = runtime;
     log(`NAS:         ${config.url}`);
     log(`Certificate: ${config.certFingerprint ? 'pinned' : config.insecureTls ? 'NOT VERIFIED (insecureTls)' : config.url.startsWith('https:') ? 'system trust store' : 'none (plain HTTP)'}`);
     let catalogSize = 0;
@@ -40,14 +40,14 @@ export async function runDoctor(argv) {
         log(`DSM API:     FAILED: ${mapped.message}`);
         if (mapped.hint)
             log(`             ${mapped.hint}`);
-        await client.close();
+        await runtime.close();
         return 1;
     }
     const selection = await chooseTools(client, config);
     log(`Tier:        ${config.tier}${config.allowPower ? ' + power' : ''}`);
     log(`Tools:       ${selection.active.length} active, ${selection.hidden.length} hidden (see "synology-mcp tools")`);
     if (values['no-login']) {
-        await client.close();
+        await runtime.close();
         return 0;
     }
     const sources = await credentials.sources();
@@ -61,10 +61,25 @@ export async function runDoctor(argv) {
         log(`Login:       FAILED: ${mapped.message}`);
         if (mapped.hint)
             log(`             ${mapped.hint}`);
-        await client.close();
+        await runtime.close();
         return 1;
     }
-    const server = buildServer({ client, config, credentials }, selection);
+    if (spreadsheet) {
+        try {
+            await spreadsheet.authorize();
+            log(`Spreadsheet: OK, ${config.spreadsheetApiUrl}`);
+        }
+        catch (error) {
+            const mapped = client.toDsmError(error);
+            log(`Spreadsheet: FAILED: ${mapped.message}`);
+            if (mapped.hint)
+                log(`             ${mapped.hint}`);
+        }
+    }
+    else {
+        log('Spreadsheet: not set up (see "synology-mcp spreadsheet-setup")');
+    }
+    const server = buildServer({ client, config, credentials, spreadsheet }, selection);
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await server.connect(serverSide);
     const mcp = new Client({ name: 'synology-doctor', version: '1.0.0' });
@@ -103,6 +118,15 @@ export async function runDoctor(argv) {
         samples.docker_container = { name: container };
         samples.docker_logs = { name: container, limit: 3 };
     }
+    const office = await client.tryCall('SYNO.SynologyDrive.Files', 'search', { keyword: q('.osheet'), path: '/mydrive', limit: 1 }, { version: 2 });
+    const sheet = office.ok ? office.data.items?.[0]?.permanent_link : undefined;
+    samples.office_lookup = { kind: 'locales' };
+    if (sheet) {
+        for (const name of ['office_file', 'office_read_text', 'office_snapshot', 'office_versions', 'office_attachments', 'sheet_info'])
+            samples[name] = { file: sheet };
+        samples.sheet_read = { file: sheet, range: 'A1:C3' };
+        samples.sheet_styles = { file: sheet, range: 'A1:A1' };
+    }
     const readTools = selection.active.filter((t) => t.tier === 'read' && !SKIP.has(t.name));
     log(`\nTrying ${readTools.length} read tools:`);
     for (const def of readTools) {
@@ -134,7 +158,7 @@ export async function runDoctor(argv) {
         process.stdout.write(`${JSON.stringify({ url: config.url, apis: catalogSize, tier: config.tier, report }, null, 2)}\n`);
     }
     await mcp.close();
-    await client.close();
+    await runtime.close();
     return failed.length ? 1 : 0;
 }
 function safeJson(text) {

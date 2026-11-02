@@ -177,9 +177,13 @@ export class DsmClient {
     has(api) {
         return this.catalogCache ? this.catalogCache.has(api) : true;
     }
-    async entry(api, method) {
+    async entry(api, method, options = {}) {
         const catalog = await this.catalog();
         const entry = catalog.get(api);
+        if (!entry && options.unlisted) {
+            const version = options.version ?? 1;
+            return { path: 'entry.cgi', minVersion: 1, maxVersion: version, requestFormat: 'JSON' };
+        }
         if (!entry) {
             throw new DsmError(`${api} is not available on this NAS.`, {
                 kind: 'api_not_found',
@@ -350,7 +354,7 @@ export class DsmClient {
     // ---------------------------------------------------------------- calls
     /** Call a DSM API method and return its `data`. */
     async call(api, method, params = {}, options = {}) {
-        const entry = await this.entry(api, method);
+        const entry = await this.entry(api, method, options);
         const version = this.negotiate(entry, api, method, options);
         const write = options.write ?? !isReadMethod(method);
         await this.ensureSession();
@@ -505,14 +509,21 @@ export class DsmClient {
     // ---------------------------------------------------------------- binary and streams
     /** GET a binary reply. A JSON reply is DSM reporting an error instead of sending data. */
     async openBinary(api, method, params, options, retried = false) {
-        const entry = await this.entry(api, method);
+        const entry = await this.entry(api, method, options);
         const version = this.negotiate(entry, api, method, options);
         await this.ensureSession();
-        const query = new URLSearchParams({ api, version: String(version), method, ...encodeParams(params) });
+        const fields = new URLSearchParams({
+            api,
+            version: String(version),
+            method,
+            ...encodeParams(params, { quoteStrings: options.quoteStrings }),
+        });
         const sentSid = this.sid;
         let response;
         try {
-            response = await fetch(`${this.config.url}/webapi/${entry.path}?${query}`, {
+            const url = `${this.config.url}/webapi/${entry.path}`;
+            response = await fetch(options.post ? url : `${url}?${fields}`, {
+                ...(options.post ? { method: 'POST', body: fields } : {}),
                 headers: this.headers(),
                 dispatcher: this.transports.single,
                 signal: this.signalFor(options),
@@ -585,7 +596,7 @@ export class DsmClient {
     }
     /** Multipart upload. The file part must come last, and `fields` go in the form as given. */
     async upload(api, method, version, fields, file, options = {}, retried = false) {
-        const entry = await this.entry(api, method);
+        const entry = await this.entry(api, method, options);
         const resolved = this.negotiate(entry, api, method, { ...options, version });
         await this.ensureSession();
         const form = new FormData();
@@ -595,6 +606,8 @@ export class DsmClient {
         for (const [key, value] of Object.entries(fields))
             form.set(key, value);
         form.set(file.field ?? 'file', file.blob, file.filename);
+        for (const [key, value] of Object.entries(file.fieldsAfter ?? {}))
+            form.set(key, value);
         const sentSid = this.sid;
         let reply;
         try {

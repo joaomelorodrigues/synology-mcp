@@ -2,20 +2,19 @@
 import { parseArgs } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { instanceKey, loadConfig } from '../config.js';
-import { CredentialProvider } from '../credentials.js';
-import { DsmClient } from '../dsm/client.js';
+import { loadConfig } from '../config.js';
 import { buildServer, chooseTools } from '../mcp/server.js';
+import { createRuntime } from '../runtime.js';
 export async function runToolsReport(argv) {
     const { values } = parseArgs({
         args: argv,
         options: { config: { type: 'string' }, hidden: { type: 'boolean', default: false } },
     });
     const config = loadConfig({ path: values.config });
-    const credentials = new CredentialProvider(instanceKey(config.url), config.username);
-    const client = new DsmClient(config, credentials);
+    const runtime = createRuntime(config);
+    const { client, credentials, spreadsheet } = runtime;
     const selection = await chooseTools(client, config);
-    const server = buildServer({ client, config, credentials }, selection);
+    const server = buildServer({ client, config, credentials, spreadsheet }, selection);
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await server.connect(serverSide);
     const mcp = new Client({ name: 'synology-tools-report', version: '1.0.0' });
@@ -37,5 +36,5 @@ export async function runToolsReport(argv) {
         process.stdout.write(`${selection.hidden.length} hidden (--hidden lists them).\n`);
     }
     await mcp.close();
-    await client.close();
+    await runtime.close();
 }

@@ -32,6 +32,9 @@ export function selectTools(defs, config, has) {
         else if (tierRank(def.tier) > tierRank(config.tier)) {
             hide('tier', `needs tier "${def.tier}" (this connection is "${config.tier}")`);
         }
+        else if (def.needsSpreadsheetApi && !config.spreadsheetApiUrl) {
+            hide('config', 'needs the Spreadsheet API container; see `synology-mcp spreadsheet-setup`');
+        }
         else if (def.requires && !def.requires.every(has)) {
             hide('package', `NAS lacks ${def.requires.filter((api) => !has(api)).join(', ')}`);
         }

@@ -151,7 +151,7 @@ export const systemTools: ToolDef[] = [
         active_tools: selection.active.length,
         active_by_module: modules,
         hidden: hiddenByReason,
-        hidden_detail: selection.hidden.filter((h) => h.reason === 'package').map((h) => `${h.name}: ${h.detail}`),
+        hidden_detail: selection.hidden.filter((h) => h.reason === 'package' || h.reason === 'config').map((h) => `${h.name}: ${h.detail}`),
         dsm_apis_on_nas: catalog?.size,
         any_other_api: 'dsm_api_search finds any DSM API on this NAS; dsm_read and dsm_write call it.',
         how_to_change: `Edit ${config.configPath} (tier: read|write|admin, allowPower, modules), then restart the MCP server.`,

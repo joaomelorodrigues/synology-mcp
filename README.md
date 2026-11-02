@@ -1,8 +1,8 @@
 # synology-mcp
 
-MCP server for managing a Synology NAS (DSM 7) from Claude or any other MCP client: system health, disks, files, Container Manager, accounts, security, Photos, Drive and any other DSM API your NAS offers.
+MCP server for managing a Synology NAS (DSM 7) from Claude or any other MCP client: system health, disks, files, Container Manager, accounts, security, Photos, Drive, Synology Office and any other DSM API your NAS offers.
 
-**Status: early (0.1.1).** A test on a real NAS with a non-administrator account confirmed the file tools and Drive search. Tools that need an administrator (system, storage, accounts) and Photos have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
+**Status: early (0.2.0).** A test on a real NAS with a non-administrator account confirmed the file tools and Drive search. Tools that need an administrator (system, storage, accounts), Photos and Synology Office have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
 
 - **Only the tools that apply.** At startup the server reads the NAS's own API list (`SYNO.API.Info`, no login needed) and hides whatever isn't installed, so a package you don't have costs no context.
 - **2FA without repeated codes.** `setup` exchanges one code for a trusted-device token, stored in the Keychain.
@@ -75,18 +75,19 @@ Settings live in `~/.config/synology-mcp/config.json`, which holds no secrets. E
 
 | Field | Effect |
 |---|---|
-| `modules` | `"all"`, or a list of: `system`, `storage`, `files`, `docker`, `packages`, `accounts`, `services`, `security`, `network`, `backup`, `scheduler`, `photos`, `drive`, `downloads`, `vm`, `surveillance`, `generic` |
+| `modules` | `"all"`, or a list of: `system`, `storage`, `files`, `docker`, `packages`, `accounts`, `services`, `security`, `network`, `backup`, `scheduler`, `photos`, `drive`, `office`, `downloads`, `vm`, `surveillance`, `generic` |
 | `localRoots` | Folders on this computer that upload and download tools may use. Symlinks and `..` are resolved before checking |
 | `protectedPaths` | NAS paths that no tool may change or delete |
 | `instructions` | Extra text for the model about this NAS |
 | `maxOutputChars` | Maximum size of a reply; 40,000 by default |
 | `sessionName` | Session name sent at login; `webui` by default. DSM refuses names it doesn't know for non-administrator accounts |
+| `spreadsheetApiUrl` | Where the Spreadsheet API container listens; enables the `sheet_*` tools. Set by `synology-mcp spreadsheet-setup` |
 
 The server reads its settings at startup, so restart your MCP client after changing them.
 
 ## Tools
 
-`synology-mcp tools --hidden` lists this connection's tools and their context cost. On a NAS with Container Manager, Photos and Drive, but without Hyper Backup, Download Station, VMM or Surveillance Station, that is 57 tools at `read` (about 8k tokens), 77 at `write` (12k) and 89 at `admin` (14k).
+`synology-mcp tools --hidden` lists this connection's tools and their context cost. On a NAS with Container Manager, Photos, Drive and Synology Office, but without Hyper Backup, Download Station, VMM or Surveillance Station, that is 68 tools at `read` (about 11k tokens), 99 at `write` (17k) and 111 at `admin` (19k). If you don't need an area, leave its module out of `modules`.
 
 | Area | Read | Write |
 |---|---|---|
@@ -100,10 +101,38 @@ The server reads its settings at startup, so restart your MCP client after chang
 | Network | `network_services`, `reverse_proxy_list` | `reverse_proxy_create`, `reverse_proxy_delete` |
 | Tasks and backups | `scheduler_tasks`, `backup_tasks` | `scheduler_run`, `backup_run` |
 | Photos and Drive | `photos_collections`, `photos_items`, `photos_search`, `photos_download`, `drive_status`, `drive_list`, `drive_search`, `drive_labels` | `photos_album_create`, `photos_album_add` |
+| Synology Office | `office_status`, `office_apis`, `office_file`, `office_read_text`, `office_snapshot`, `office_versions`, `office_attachments`, `office_templates`, `office_lookup`, `office_export`, `office_media_download` | `office_create`, `office_import`, `office_copy`, `office_update`, `office_version_action`, `office_attachment_add`, `office_template_action`, `office_theme_apply`, `office_settings_set`, `office_sheet_copy`, `office_call` |
+| Spreadsheet API container | `sheet_info`, `sheet_read`, `sheet_styles`, `sheet_export` | `sheet_write`, `sheet_append`, `sheet_format`, `sheet_tabs`, `sheet_dimensions`, `sheet_create`, `sheet_delete` |
 | Download Station, VMM, Surveillance | `downloads_list`, `vm_list`, `surveillance_cameras` | `download_add`, `download_control`, `vm_control` |
 | Any API | `dsm_api_search`, `dsm_read` | `dsm_write` |
 
 Tools for a package that isn't installed stay hidden. They appear once you install it and restart your client.
+
+## Synology Office
+
+Office files are addressed by Drive path (`/mydrive/Budget.osheet`), by `link_id` (which `drive_list` and `drive_search` return) or by their `/oo/r/` URL. There are two ways in.
+
+**Through DSM, with nothing else to install.** The `office_*` tools read any spreadsheet, document or presentation as text or in full, create empty files, convert CSV and Microsoft or OpenDocument files into Office files, export to `xlsx`, `docx`, `pptx`, `ods`, `odt` and `odp`, and manage versions, attachments, templates, themes and settings.
+
+Synology doesn't document these `SYNO.Office.*` APIs. Their methods and parameters come from the web client that Synology Office 3.7.2 serves. `office_apis` lists them all with the tool that reaches each, and `office_call` calls any method without a dedicated tool. Of the 49 APIs on the NAS these were read from, Synology's client never calls 10, so their methods are unknown: `Doc.Snapshot`, `Group`, `Metrics`, `Notification`, `OFile`, `Permission`, `Permission.User`, `Presentation.Snapshot`, `Resource` and `Shard.JSConfig`.
+
+These APIs have limits:
+
+- They can't edit the cells of an existing `.osheet`. Synology's client doesn't do that through them either.
+- PDF and CSV exports aren't available, because Synology's client builds those in the browser. The `sheet_export` tool can give CSV.
+- Saving or publishing a template needs a thumbnail upload, which has no tool.
+
+**Through the official Spreadsheet API, to edit cells in place.** The `sheet_*` tools read and write ranges, append rows, format cells, and manage tabs, rows and columns in the live file. They need Synology's [`synology/spreadsheet-api`](https://hub.docker.com/r/synology/spreadsheet-api) container, which isn't part of the Office package:
+
+1. Deploy [docker-compose.spreadsheet.yml](docker-compose.spreadsheet.yml), with Portainer or `docker compose`. The image tag must match your Synology Office: 3.4.x for Office 3.7.0 or later, 3.3.x for Office 3.6.x. Synology advises against running it on the same DSM as Office when many spreadsheets are active, since each open spreadsheet gets its own worker.
+2. Run `synology-mcp spreadsheet-setup`. It tests a login through the container before storing anything.
+3. Restart your MCP client.
+
+Three things to expect from this container:
+
+- **2FA.** Its login accepts no 2FA code, as far as a third-party project reports, so a 2FA account needs a dedicated DSM account without 2FA.
+- **Certificates.** It can't verify DSM's self-signed certificate, so point it at DSM's `http` port.
+- **Plain HTTP.** It listens on plain HTTP by default, so the password and token aren't encrypted on the way to it unless you add a reverse proxy or use a VPN.
 
 ## How 2FA works
 
@@ -165,6 +194,9 @@ The code is split into `src/dsm` (DSM client: session, TLS, errors), `src/mcp` (
 ### Verification status
 
 The tests cover the server's behavior against a simulated DSM. On a real NAS, with a non-administrator account, these have been confirmed: login, listing, searching, reading, downloading, writing, uploading, copying, renaming and deleting files, creating folders, and searching Drive. The shape of the other calls comes from the reference projects below, which tested them on DSM 7.x, but it still needs confirming:
+
+- No `office_*` tool has run against a real NAS. Their calls come from Synology Office 3.7.2's web client, so a reply may differ from what the tool expects. `doctor` tries the read tools on the first `.osheet` it finds.
+- No `sheet_*` tool has run against the real container. Synology's API reference is not public, so their calls follow [vocweb/synology-mcp-server](https://github.com/vocweb/synology-mcp-server), which is itself tested mostly against mocks.
 
 - Read tools can be confirmed with `doctor`, using an administrator account for system, storage and accounts. Some have no equivalent in the references, so watch those first: `security_login_activity`, `drive_labels`, and `photos_items` with no source given.
 - The 2FA flow can be confirmed by running `setup` on an account that uses it.
