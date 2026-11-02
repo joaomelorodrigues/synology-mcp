@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { q, type CallOptions, type DsmClient, type Params } from '../dsm/client.js';
 import { DsmError } from '../dsm/errors.js';
 import { asList, bytes, isoTime, percent } from '../mcp/format.js';
-import { normalizeNasPath, resolveLocalPath } from '../mcp/paths.js';
+import { normalizeDrivePath, resolveLocalPath } from '../mcp/paths.js';
 import { confirmationNeeded, tool, type ToolDef } from '../mcp/registry.js';
 
 // ------------------------------------------------------------------ Photos
@@ -218,7 +218,7 @@ const DRIVE_VERSION = 11;
 export function drivePath(input: string): string {
   const value = input.trim();
   if (!value) throw new DsmError('The path is empty.', { kind: 'invalid_parameter' });
-  if (value.startsWith('/')) return normalizeNasPath(value);
+  if (value.startsWith('/')) return normalizeDrivePath(value);
   if (/^(id|link):./.test(value)) return value;
   throw new DsmError(`"${input}" is not a Drive path or an id: or link: reference.`, {
     kind: 'invalid_parameter',
@@ -231,7 +231,7 @@ export function driveLocation(input: string): string {
   const value = input.trim();
   if (value === '/mydrive' || value === 'mydrive') return 'mydrive';
   if (value === '/team-folders' || value === 'team_folders') return 'team_folders';
-  if (value.startsWith('/')) return normalizeNasPath(value);
+  if (value.startsWith('/')) return normalizeDrivePath(value);
   return value;
 }
 

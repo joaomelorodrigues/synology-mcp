@@ -26,6 +26,7 @@ export interface RecordedCall {
   cookie?: string;
   token?: string;
   file?: { name: string; content: string };
+  headers: IncomingMessage['headers'];
 }
 
 export type Route = (params: Record<string, string>, call: RecordedCall) => unknown;
@@ -164,7 +165,7 @@ export class FakeDsm {
       return;
     }
 
-    const call: RecordedCall = { api, method, version: Number(version), params: rest, url: req.url ?? '', cookie, token, file };
+    const call: RecordedCall = { api, method, version: Number(version), params: rest, url: req.url ?? '', cookie, token, file, headers: req.headers };
     this.calls.push(call);
 
     if (!cookie || !this.sessions.has(cookie)) {

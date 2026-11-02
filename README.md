@@ -2,7 +2,7 @@
 
 MCP server for managing a Synology NAS (DSM 7) from Claude or any other MCP client: system health, disks, files, Container Manager, accounts, security, Photos, Drive, Synology Office and any other DSM API your NAS offers.
 
-**Status: early (0.3.1).** Tests on a real NAS with a non-administrator account confirmed the file tools, most Drive tools, and reading, exporting, importing, copying and renaming Synology Office files. Tools that need an administrator (system, storage, accounts), Photos, MailPlus, Calendar and editing `.osheet` cells have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
+**Status: early (0.3.2).** Tests on a real NAS with a non-administrator account confirmed the file tools, most Drive tools, and reading, exporting, importing, copying and renaming Synology Office files. Tools that need an administrator (system, storage, accounts), Photos, MailPlus, Calendar and editing `.osheet` cells have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
 
 - **Only the tools that apply.** At startup the server reads the NAS's own API list (`SYNO.API.Info`, no login needed) and hides whatever isn't installed, so a package you don't have costs no context.
 - **2FA without repeated codes.** `setup` exchanges one code for a trusted-device token, stored in the Keychain.
@@ -77,7 +77,7 @@ Settings live in `~/.config/synology-mcp/config.json`, which holds no secrets. E
 |---|---|
 | `modules` | `"all"`, or a list of: `system`, `storage`, `files`, `docker`, `packages`, `accounts`, `services`, `security`, `network`, `backup`, `scheduler`, `photos`, `drive`, `office`, `mail`, `calendar`, `downloads`, `vm`, `surveillance`, `generic` |
 | `localRoots` | Folders on this computer that upload and download tools may use. Symlinks and `..` are resolved before checking |
-| `protectedPaths` | NAS paths that no tool may change or delete |
+| `protectedPaths` | NAS paths that the `files_*` and `drive_*` tools refuse to change or delete, whichever way a Drive path is written. The Office, Spreadsheet and generic call tools don't check it |
 | `instructions` | Extra text for the model about this NAS |
 | `maxOutputChars` | Maximum size of a reply; 40,000 by default |
 | `sessionName` | Session name sent at login; `webui` by default. DSM refuses names it doesn't know for non-administrator accounts |
@@ -113,7 +113,7 @@ Tools for a package that isn't installed stay hidden. They appear once you insta
 
 ## Synology Office
 
-Office files are addressed by Drive path (`/mydrive/Budget.osheet`), by `link_id` (which `drive_list` and `drive_search` return) or by their `/oo/r/` URL. There are two ways in.
+Office files are addressed by Drive path (`/mydrive/Budget.osheet`, `/team-folders/Sales/Budget.osheet`, or the same team folder as File Station shows it, `/Sales/Budget.osheet`), by `link_id` (which `drive_list` and `drive_search` return) or by their `/oo/r/` URL. There are two ways in.
 
 **Through DSM, with nothing else to install.** The `office_*` tools read any spreadsheet, document or presentation as text or in full, create empty files, convert CSV and Microsoft or OpenDocument files into Office files, export to `xlsx`, `docx`, `pptx`, `ods`, `odt` and `odp`, and manage versions, attachments, templates, themes and settings.
 
@@ -208,9 +208,9 @@ The code is split into `src/dsm` (DSM client: session, TLS, errors), `src/mcp` (
 
 ### Verification status
 
-The tests cover the server's behavior against a simulated DSM. On a real NAS, with a non-administrator account, these have been confirmed: login, listing, searching, reading, downloading, writing, uploading, copying, renaming and deleting files, creating folders, most `drive_*` tools, and reading, exporting, importing, copying and renaming Synology Office files. These still need confirming:
+The tests cover the server's behavior against a simulated DSM. On a real NAS, with a non-administrator account, these have been confirmed: login, listing, searching, reading, downloading, writing, uploading, copying, renaming and deleting files, creating folders, most `drive_*` tools, and reading, exporting, importing, copying, renaming and restoring Synology Office files, including `office_file` with a version and `office_call` with no version. These still need confirming:
 
-- Corrected after that test and not run on a real NAS since: `office_version_action` restoring into a folder, `office_file` with a version, `office_call` with no version, and `drive_upload`.
+- Corrected after that test and not run on a real NAS since: `drive_upload`, `drive_download` with several files or a folder, and team folder paths written as `/Sales/...`. The upload and ZIP requests follow the code of Drive's web client, not a capture of its traffic.
 - The `sheet_*` tools follow Synology's published Spreadsheet API 3.4.1. None of them has run against the real container yet.
 - The `mail_*` and `calendar_*` tools follow those published APIs. They have not run on a real NAS, because the one tested has neither package.
 - Other calls come from the reference projects below, which tested them on DSM 7.x, or from Synology Office 3.7.2's web client. `doctor` tries the Office read tools on the first `.osheet` it finds.

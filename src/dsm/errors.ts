@@ -237,6 +237,11 @@ const FOTO: Record<number, CodeInfo> = {
 
 /** Synology Office and Drive codes, as their own web clients handle them. */
 const OFFICE: Record<number, CodeInfo> = {
+  1000: {
+    kind: 'dsm_error',
+    message: 'Drive could not do this with that file or folder',
+    hint: 'Check the path: Drive paths start with /mydrive or /team-folders/<name>. Any detail from DSM is in details.',
+  },
   1002: { kind: 'permission_denied', message: 'This account has no permission on this file or folder' },
   1003: {
     kind: 'not_found',

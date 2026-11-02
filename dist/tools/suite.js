@@ -5,6 +5,7 @@
  * (api, method, version) with the session this server already has. Spreadsheet stays in
  * sheets.ts because it is a different server. suite_apis lists every published operation.
  */
+import { randomBytes } from 'node:crypto';
 import { existsSync, openAsBlob, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
@@ -16,6 +17,9 @@ import { SUITE_OPS, suiteOp } from '../suite/catalog.js';
 import { driveFileView, drivePath } from './apps.js';
 const FILES = 'SYNO.SynologyDrive.Files';
 const FILES_V = 11;
+/** The version Drive's own web client uses for uploads and ZIP downloads. */
+const FILES_TRANSFER_V = 2;
+const TASKS = 'SYNO.SynologyDrive.Tasks';
 const PRESENCE = ['SYNO.SynologyDrive.Files', 'SYNO.MailClient.Mailbox', 'SYNO.Cal.Cal'];
 const when = z.union([z.string(), z.number()]);
 const conflict = z.enum(['autorename', 'overwrite', 'skip', 'version', 'stop']).default('autorename');
@@ -69,16 +73,16 @@ async function awaitDriveTask(context, taskId, waitSeconds, label) {
     const id = taskId == null || taskId === '' ? undefined : String(taskId);
     if (!id)
         return { status: 'done' };
-    if (!context.client.has('SYNO.SynologyDrive.Tasks'))
+    if (!context.client.has(TASKS))
         return { status: 'accepted', task_id: id };
     const deadline = Date.now() + waitSeconds * 1000;
     let ticks = 0;
     while (Date.now() < deadline && !context.signal.aborted) {
-        const task = await syno(context.client, 'SYNO.SynologyDrive.Tasks', 'get', 1, { task_id: id }, { signal: context.signal });
+        const task = await syno(context.client, TASKS, 'get', 1, { task_id: id }, { signal: context.signal });
         if (task.status === 'finished' || task.finish === true || task.finished === true) {
             const errors = asList(task.result?.errors ?? task.errors);
             if (errors.length)
-                throw new DsmError(`${label} failed.`, { kind: 'dsm_error', api: 'SYNO.SynologyDrive.Tasks', method: 'get', details: errors });
+                throw new DsmError(`${label} failed.`, { kind: 'dsm_error', api: TASKS, method: 'get', details: errors });
             return { status: 'done', task_id: id, result: redactSecrets(task.result ?? task) };
         }
         ticks += 1;
@@ -86,6 +90,31 @@ async function awaitDriveTask(context, taskId, waitSeconds, label) {
         await sleep(1000);
     }
     return { status: 'still_running', task_id: id, note: 'Still running on the NAS. Check the folder with drive_list in a moment.' };
+}
+/**
+ * Start the ZIP as Drive's web client does: a dry run that names files needing a password, then
+ * the real request, which answers with a background task. The file is fetched by task id later.
+ */
+async function startDriveZip(context, sources, archive) {
+    const { client, signal } = context;
+    if (!client.has(TASKS)) {
+        throw new DsmError('This NAS offers no Drive task API, so a ZIP cannot be followed to the end.', { kind: 'not_supported', hint: 'Download the files one at a time.' });
+    }
+    const params = { archive_name: archive, download_type: 'download', files: sources, force_download: true, json_error: true };
+    const dryRun = await syno(client, FILES, 'download', FILES_TRANSFER_V, { dry_run: true, ...params }, { signal, timeoutMs: 120_000 });
+    const encrypted = asList(dryRun.result);
+    if (encrypted.length) {
+        const names = encrypted.map((file) => file.name ?? file.file_id ?? String(file)).join(', ');
+        throw new DsmError(`A ZIP cannot include encrypted documents, and these are encrypted: ${names}.`, {
+            kind: 'refused',
+            hint: 'Leave them out, and save each one with office_export and its password.',
+        });
+    }
+    const started = await syno(client, FILES, 'download', FILES_TRANSFER_V, params, { signal, timeoutMs: 120_000, write: true });
+    if (!started.async_task_id) {
+        throw new DsmError('Drive did not start a task for the ZIP.', { kind: 'bad_reply', api: FILES, method: 'download', details: Object.keys(started) });
+    }
+    return String(started.async_task_id);
 }
 function filesOf(data) {
     return asList(data?.items ?? data?.files ?? data).map(driveFileView);
@@ -301,7 +330,7 @@ export const suiteMetaTools = [
         },
     }),
 ];
-const driveFile = z.string().describe('A Drive path such as /mydrive/Notes, or an id: or link: reference from drive_list');
+const driveFile = z.string().describe('A Drive path such as /mydrive/Notes or /team-folders/Sales/Notes, or an id: or link: reference from drive_list');
 export const driveApiTools = [
     tool({
         name: 'drive_file',
@@ -467,7 +496,7 @@ export const driveApiTools = [
     tool({
         name: 'drive_download',
         title: 'Download from Drive',
-        description: 'Save a Drive file on this computer. Several files download as one ZIP. kind=thumb saves an image thumbnail of one file. local_path must be inside localRoots.',
+        description: 'Save a Drive file on this computer. Several files, or a folder, come as one ZIP that the NAS builds first; if that outlasts wait_seconds, the reply has a task_id to pass in a second call with the same files. kind=thumb saves an image thumbnail of one file. local_path must be inside localRoots.',
         module: 'drive',
         tier: 'read',
         localWrite: true,
@@ -477,17 +506,33 @@ export const driveApiTools = [
             local_path: z.string().describe('Absolute local file or existing folder'),
             kind: z.enum(['file', 'thumb']).default('file'),
             overwrite: z.boolean().default(false),
+            wait_seconds: z.number().int().min(0).max(600).default(120).describe('How long to wait for the NAS to build a ZIP'),
+            task_id: z.string().optional().describe('Fetch a ZIP from an earlier reply whose status was still_running'),
         },
-        handler: async ({ files, local_path, kind, overwrite }, { client, config, signal }) => {
+        handler: async ({ files, local_path, kind, overwrite, wait_seconds, task_id }, context) => {
+            const { client, config, signal } = context;
             const sources = files.map((file) => drivePath(file));
-            if (kind === 'thumb' && sources.length !== 1)
-                throw new DsmError('kind=thumb takes exactly one file.', { kind: 'invalid_parameter' });
-            const name = kind === 'thumb' ? `${basename(sources[0] ?? 'thumb')}.jpg` : sources.length === 1 ? basename(sources[0]) : 'drive.zip';
-            const destination = localFile(local_path, name, config.localRoots, overwrite);
-            const written = kind === 'thumb'
-                ? await client.downloadToFile(FILES, 'get_thumbnail', { path: sources[0], size: 'large' }, destination, { version: FILES_V, quoteStrings: true, signal, timeoutMs: 1_800_000 })
-                : await client.downloadToFile(FILES, 'download', { files: sources, force_download: true }, destination, { version: FILES_V, post: true, quoteStrings: true, signal, timeoutMs: 1_800_000 });
-            return { saved_to: destination, size: bytes(written), files: sources.length };
+            const options = { quoteStrings: true, signal, timeoutMs: 1_800_000 };
+            const save = (destination, written) => ({ saved_to: destination, size: bytes(written), files: sources.length });
+            if (kind === 'thumb') {
+                if (sources.length !== 1)
+                    throw new DsmError('kind=thumb takes exactly one file.', { kind: 'invalid_parameter' });
+                const destination = localFile(local_path, `${basename(sources[0])}.jpg`, config.localRoots, overwrite);
+                return save(destination, await client.downloadToFile(FILES, 'get_thumbnail', { path: sources[0], size: 'large' }, destination, { ...options, version: FILES_V }));
+            }
+            const single = sources.length === 1 ? await syno(client, FILES, 'get', FILES_V, { path: sources[0] }, { signal }) : undefined;
+            const singleName = single ? basename(String(single.name ?? sources[0])) : undefined;
+            if (single && single.type !== 'dir' && !task_id) {
+                const destination = localFile(local_path, singleName, config.localRoots, overwrite);
+                return save(destination, await client.downloadToFile(FILES, 'download', { files: sources, force_download: true }, destination, { ...options, version: FILES_V, post: true }));
+            }
+            const archive = singleName ?? 'drive';
+            const destination = localFile(local_path, `${archive}.zip`, config.localRoots, overwrite);
+            const task = await awaitDriveTask(context, task_id ?? (await startDriveZip(context, sources, archive)), wait_seconds, 'Building the ZIP');
+            if (task.status !== 'done') {
+                return { ...task, note: 'The NAS is still building the ZIP. Call drive_download again with this task_id and the same files to fetch it.' };
+            }
+            return save(destination, await client.downloadToFile(FILES, 'download', { task_id: task.task_id }, destination, { ...options, version: FILES_TRANSFER_V, post: true }));
         },
     }),
     tool({
@@ -506,7 +551,20 @@ export const driveApiTools = [
         handler: async ({ local_path, path, on_conflict }, { client, config, signal }) => {
             const local = resolveLocalPath(local_path, config.localRoots, { mustExist: true });
             const target = guardFolder(path, config.protectedPaths);
-            const data = await client.upload(FILES, 'upload', FILES_V, { path: JSON.stringify(target), type: JSON.stringify('file'), conflict_action: JSON.stringify(on_conflict) }, { blob: await openAsBlob(local), filename: basename(local) }, { signal, timeoutMs: 1_800_000 });
+            // As Drive's web client sends it: text in the form as it is, everything else in the URL, and
+            // an empty part first, which opens a slice session and says how much of the file it holds.
+            const fields = { path: target, type: 'file', conflict_action: on_conflict };
+            const modified_time = String(Math.floor(statSync(local).mtimeMs / 1000));
+            const session = randomBytes(16).toString('hex');
+            const send = (blob, last, query) => client.upload(FILES, 'upload', FILES_TRANSFER_V, fields, { blob, filename: 'blob' }, {
+                signal,
+                timeoutMs: 3_600_000,
+                query,
+                headers: { 'X-TMP-FILE': session, 'X-TYPE-NAME': 'SLICEUPLOAD', 'X-FILE-CHUNK-END': String(last) },
+            });
+            const opened = await send(new Blob([]), false, { modified_time });
+            const blob = await openAsBlob(local);
+            const data = await send(blob.slice(Number(opened.uploaded_size) || 0), true, { modified_time, mute: 'false' });
             return { uploaded: basename(local), ...driveFileView(data.file ?? data) };
         },
     }),

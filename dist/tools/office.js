@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { isReadMethod } from '../dsm/client.js';
 import { DsmError } from '../dsm/errors.js';
 import { asList, bytes, isoTime, redactSecrets } from '../mcp/format.js';
-import { resolveLocalPath } from '../mcp/paths.js';
+import { normalizeDrivePath, resolveLocalPath } from '../mcp/paths.js';
 import { confirmationNeeded, tool } from '../mcp/registry.js';
 import { assertCallAllowed } from './generic.js';
 const NODE = 'SYNO.Office.Node';
@@ -71,7 +71,7 @@ const MS_EXTENSION = { sheet: 'xlsx', doc: 'docx', presentation: 'pptx' };
 const ODF_EXTENSION = { sheet: 'ods', doc: 'odt', presentation: 'odp' };
 const OFFICE_EXTENSION = { osheet: 'sheet', odoc: 'doc', oslides: 'presentation' };
 const TYPE_EXTENSION = { sheet: '.osheet', doc: '.odoc', presentation: '.oslides' };
-const fileParam = z.string().describe('A Drive path such as /mydrive/Budget.osheet, a link_id from drive_list or drive_search, or an /oo/r/ URL');
+const fileParam = z.string().describe('A Drive path such as /mydrive/Budget.osheet or /team-folders/Sales/Budget.osheet, a link_id from drive_list or drive_search, or an /oo/r/ URL');
 const passwordParam = z.string().optional().describe('Only for an encrypted document. It passes through this conversation');
 const versionParam = z.string().min(1).describe('A version id from office_versions, a 40-character hash');
 const COMMIT = { device: 'desktop' };
@@ -81,8 +81,10 @@ export function officePath(input) {
     const url = /\/oo\/r\/([A-Za-z0-9_-]+)/.exec(value);
     if (url)
         return `link:${url[1]}`;
-    if (/^(link|id):./.test(value) || value.startsWith('/'))
+    if (/^(link|id):./.test(value))
         return value;
+    if (value.startsWith('/'))
+        return normalizeDrivePath(value);
     if (/^\d+$/.test(value))
         return `id:${value}`;
     if (/^[A-Za-z0-9_-]{6,}$/.test(value))

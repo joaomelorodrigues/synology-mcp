@@ -66,6 +66,9 @@ describe('addressing Office files', () => {
     ['42', 'id:42'],
     ['LINK123', 'link:LINK123'],
     ['https://nas.example.com:5001/oo/r/LINK123#tid=1', 'link:LINK123'],
+    ['/Acme/Plans/Budget.osheet', '/team-folders/Acme/Plans/Budget.osheet'],
+    ['/team-folders/Acme/Budget.osheet', '/team-folders/Acme/Budget.osheet'],
+    ['/home/Drive/Budget.osheet', '/mydrive/Budget.osheet'],
   ])('reads %s as %s', (input, expected) => {
     expect(officePath(input)).toBe(expected);
   });
@@ -87,6 +90,11 @@ describe('Office tools over DSM', () => {
   afterEach(async () => {
     await harness.close();
     await fake.stop();
+  });
+
+  it('finds a file in a team folder from its File Station path', async () => {
+    await harness.call('office_file', { file: '/Acme/Plans/Budget.osheet' });
+    expect(fake.callsTo(NODE, 'get')[0]!.params.path).toBe('"/team-folders/Acme/Plans/Budget.osheet"');
   });
 
   it('gives details and a URL to open the file, JSON-quoting values as the client does', async () => {

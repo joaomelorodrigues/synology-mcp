@@ -531,7 +531,15 @@ export class DsmClient {
         const type = response.headers.get('content-type') ?? '';
         if (type.includes('application/json')) {
             const body = this.parseJson(await response.text(), response.status, api, method);
-            const code = body.error?.code ?? 0;
+            const code = body.error?.code;
+            if (code === undefined) {
+                throw new DsmError(`DSM answered ${api}/${method} with JSON instead of a file, without reporting an error.`, {
+                    kind: 'bad_reply',
+                    api,
+                    method,
+                    details: Object.keys(body.data ?? {}),
+                });
+            }
             if (this.isSessionError(code) && !retried) {
                 await this.relogin(sentSid);
                 return this.openBinary(api, method, params, options, true);
@@ -590,15 +598,19 @@ export class DsmClient {
             throw error instanceof DsmError ? error : this.mapTransportError(error, api, method, true);
         }
     }
-    /** Multipart upload. The file part must come last, and `fields` go in the form as given. */
+    /**
+     * Multipart upload. The file part must come last, and `fields` go in the form as given. With
+     * `query`, api, version and method travel in the URL with those values, not in the form.
+     */
     async upload(api, method, version, fields, file, options = {}, retried = false) {
         const entry = await this.entry(api, method);
         const resolved = this.negotiate(entry, api, method, { ...options, version });
         await this.ensureSession();
+        const identity = { api, version: String(resolved), method };
         const form = new FormData();
-        form.set('api', api);
-        form.set('version', String(resolved));
-        form.set('method', method);
+        if (!options.query)
+            for (const [key, value] of Object.entries(identity))
+                form.set(key, value);
         for (const [key, value] of Object.entries(fields))
             form.set(key, value);
         form.set(file.field ?? 'file', file.blob, file.filename);
@@ -607,9 +619,10 @@ export class DsmClient {
         const sentSid = this.sid;
         let reply;
         try {
-            const response = await fetch(`${this.config.url}/webapi/${entry.path}`, {
+            const search = options.query ? `?${new URLSearchParams({ ...identity, ...options.query })}` : '';
+            const response = await fetch(`${this.config.url}/webapi/${entry.path}${search}`, {
                 method: 'POST',
-                headers: this.headers(),
+                headers: { ...this.headers(), ...options.headers },
                 body: form,
                 dispatcher: this.transports.single,
                 signal: this.signalFor({ timeoutMs: 600_000, ...options }),

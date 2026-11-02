@@ -274,6 +274,19 @@ describe('DSM client', () => {
     expect(attempts).toBe(2);
   });
 
+  it('does not call a successful JSON reply to a download "DSM error 0"', async () => {
+    await setup();
+    fake.onRaw(INFO, 'download', (res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ success: true, data: { async_task_id: 'x' } }));
+    });
+    const error = (await client.readBinary(INFO, 'download', {}, 100).catch((e) => e)) as DsmError;
+    expect(error.kind).toBe('bad_reply');
+    expect(error.message).toContain('instead of a file');
+    expect(error.message).not.toContain('error 0');
+    expect(error.details).toEqual(['async_task_id']);
+  });
+
   it('ends only its own session on close, by its cookie and without naming webui', async () => {
     await setup();
     fake.on(INFO, 'get', () => ({}));

@@ -44,10 +44,37 @@ function isAtOrBelow(path: string, parent: string): boolean {
   return path === parent || path.startsWith(`${parent}/`);
 }
 
+const DRIVE_ROOTS = new Set(['mydrive', 'team-folders', 'shared-with-me', 'recycle-bin']);
+
+/**
+ * Drive addresses files under its own roots, while File Station shows the same files as
+ * /Team/... and /home/Drive/.... DSM answers those spellings with a bare error 1000, so they are
+ * translated here.
+ */
+export function normalizeDrivePath(input: string): string {
+  const path = normalizeNasPath(input);
+  const [root, ...rest] = path.slice(1).split('/');
+  if (DRIVE_ROOTS.has(root!)) return path;
+  if (root === 'home' && rest[0] === 'Drive') return ['/mydrive', ...rest.slice(1)].join('/');
+  if (root === 'home' || root === 'homes') {
+    throw invalid(`"${input}" is not in Drive. Of a home folder, Drive sees only /home/Drive, which it calls /mydrive. Use the files_ tools for the rest.`);
+  }
+  return `/team-folders/${path.slice(1)}`;
+}
+
+/** A lowercased path as File Station spells it, so a guard holds whichever way it was written. */
+function fileStationForm(path: string): string {
+  if (isAtOrBelow(path, '/mydrive')) return `/home/drive${path.slice('/mydrive'.length)}`;
+  if (path.startsWith('/team-folders/')) return path.slice('/team-folders'.length);
+  return path;
+}
+
 export function assertNotProtected(path: string, protectedPaths: readonly string[]): void {
+  const target = path.toLowerCase();
   for (const entry of protectedPaths) {
     const guarded = normalizeNasPath(entry);
-    if (isAtOrBelow(path.toLowerCase(), guarded.toLowerCase())) {
+    const parent = guarded.toLowerCase();
+    if (isAtOrBelow(target, parent) || isAtOrBelow(fileStationForm(target), fileStationForm(parent))) {
       throw refused(`"${path}" is protected by this server's protectedPaths setting (${guarded}).`, 'Ask the owner to change it in the config if this is intended.');
     }
   }
@@ -61,7 +88,7 @@ export function assertRemovable(path: string, protectedPaths: readonly string[])
       'Work with the items inside it. To remove the shared folder on purpose, use share_delete.',
     );
   }
-  if (isRecycleRoot(path)) {
+  if (isRecycleRoot(path) || isRecycleRoot(fileStationForm(path.toLowerCase()))) {
     throw refused(`"${path}" is a whole recycle bin. Changing it would affect every user's deleted items for good.`, 'Work with the items inside it by path.');
   }
   assertNotProtected(path, protectedPaths);
