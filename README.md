@@ -2,13 +2,13 @@
 
 MCP server for managing a Synology NAS (DSM 7) from Claude or any other MCP client: system health, disks, files, Container Manager, accounts, security, Photos, Drive, Synology Office and any other DSM API your NAS offers.
 
-**Status: early (0.3.0).** A test on a real NAS with a non-administrator account confirmed the file tools, Drive search, and reading, exporting, importing and copying Synology Office files. Tools that need an administrator (system, storage, accounts), Photos, MailPlus, Calendar and editing `.osheet` cells have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
+**Status: early (0.3.1).** Tests on a real NAS with a non-administrator account confirmed the file tools, most Drive tools, and reading, exporting, importing, copying and renaming Synology Office files. Tools that need an administrator (system, storage, accounts), Photos, MailPlus, Calendar and editing `.osheet` cells have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
 
 - **Only the tools that apply.** At startup the server reads the NAS's own API list (`SYNO.API.Info`, no login needed) and hides whatever isn't installed, so a package you don't have costs no context.
 - **2FA without repeated codes.** `setup` exchanges one code for a trusted-device token, stored in the Keychain.
 - **The NAS's certificate is pinned.** DSM's default certificate is self-signed. Instead of turning verification off, its fingerprint is pinned and checked on every connection, before the password is sent.
 - **It won't get your IP blocked.** Refused credentials are never sent again, so they can't trip DSM's Auto Block.
-- **Risky changes ask first.** Deleting, sharing publicly or stopping a package returns a preview before anything happens.
+- **Risky changes ask first.** Deleting, sharing, sending email, forwarding mail or stopping a package returns a preview before anything happens.
 - **Any DSM API.** `dsm_api_search` and `dsm_read` reach every API on the NAS, including those with no dedicated tool.
 
 ## Install and connect
@@ -49,7 +49,7 @@ The tier is set with `tier`. Tools above it are never registered, so the model h
 | Tier | What it allows |
 |---|---|
 | `read` (default) | Queries only. Download tools can also save to this computer, inside `localRoots` |
-| `write` | Files, containers, packages, scheduled tasks, backups, photo albums, downloads and VMs. Deleting asks for confirmation |
+| `write` | Files, containers, packages, scheduled tasks, backups, photo albums, downloads, VMs, Drive, Office, MailPlus and Calendar. Deleting, sharing and sending email ask for confirmation |
 | `admin` | Also accounts, shared folders, file services, reverse proxy rules and `dsm_write` |
 | `allowPower: true` | Separate from the tiers: reboot, shut down and install DSM updates |
 
@@ -208,12 +208,12 @@ The code is split into `src/dsm` (DSM client: session, TLS, errors), `src/mcp` (
 
 ### Verification status
 
-The tests cover the server's behavior against a simulated DSM. On a real NAS, with a non-administrator account, these have been confirmed: login, listing, searching, reading, downloading, writing, uploading, copying, renaming and deleting files, creating folders, searching Drive, and reading, exporting, importing and copying Synology Office files. The shape of the other calls comes from the reference projects below, which tested them on DSM 7.x, but it still needs confirming:
+The tests cover the server's behavior against a simulated DSM. On a real NAS, with a non-administrator account, these have been confirmed: login, listing, searching, reading, downloading, writing, uploading, copying, renaming and deleting files, creating folders, most `drive_*` tools, and reading, exporting, importing, copying and renaming Synology Office files. These still need confirming:
 
-- Renaming with `office_update` and `office_version_action` were corrected after that test and have not run on a real NAS since. Their calls come from Synology Office 3.7.2's web client. `doctor` tries the Office read tools on the first `.osheet` it finds.
+- Corrected after that test and not run on a real NAS since: `office_version_action` restoring into a folder, `office_file` with a version, `office_call` with no version, and `drive_upload`.
 - The `sheet_*` tools follow Synology's published Spreadsheet API 3.4.1. None of them has run against the real container yet.
-- Drive file calls (`drive_list`, `drive_search`, and the newer `drive_*` tools) follow the published Drive API 2, which is `SYNO.SynologyDrive.Files` version 11. Search now sends `location` (for example `mydrive`) rather than `path`. MailPlus and Calendar tools follow those published APIs and have not been run on a real NAS yet.
-
+- The `mail_*` and `calendar_*` tools follow those published APIs. They have not run on a real NAS, because the one tested has neither package.
+- Other calls come from the reference projects below, which tested them on DSM 7.x, or from Synology Office 3.7.2's web client. `doctor` tries the Office read tools on the first `.osheet` it finds.
 - Read tools can be confirmed with `doctor`, using an administrator account for system, storage and accounts. Some have no equivalent in the references, so watch those first: `security_login_activity`, `drive_labels`, and `photos_items` with no source given.
 - The 2FA flow can be confirmed by running `setup` on an account that uses it.
 - Write tools can only be confirmed by using them. Try them on unimportant data first, especially `files_compress`, which also has no equivalent in the references.

@@ -19,6 +19,7 @@ const FILES_V = 11;
 const PRESENCE = ['SYNO.SynologyDrive.Files', 'SYNO.MailClient.Mailbox', 'SYNO.Cal.Cal'];
 const when = z.union([z.string(), z.number()]);
 const conflict = z.enum(['autorename', 'overwrite', 'skip', 'version', 'stop']).default('autorename');
+const BODY_PREVIEW_CHARS = 500;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function syno(client, api, method, version, params, options = {}) {
     return client.call(api, method, params, { version, quoteStrings: true, ...options });
@@ -397,7 +398,7 @@ export const driveApiTools = [
         description: 'Copy files or folders to another Drive folder. This runs as a task on the NAS.',
         module: 'drive',
         tier: 'write',
-        destructive: false,
+        destructive: true,
         requires: [FILES],
         input: {
             files: z.array(driveFile).min(1).max(100),
@@ -466,7 +467,7 @@ export const driveApiTools = [
     tool({
         name: 'drive_download',
         title: 'Download from Drive',
-        description: 'Save a Drive file on this computer. kind=archive packs files into one download. kind=thumb saves an image thumbnail. local_path must be inside localRoots.',
+        description: 'Save a Drive file on this computer. Several files download as one ZIP. kind=thumb saves an image thumbnail of one file. local_path must be inside localRoots.',
         module: 'drive',
         tier: 'read',
         localWrite: true,
@@ -495,7 +496,7 @@ export const driveApiTools = [
         description: 'Upload a local file into a Drive folder. local_path must be inside localRoots. path is the destination file, such as /mydrive/Notes/photo.jpg.',
         module: 'drive',
         tier: 'write',
-        destructive: false,
+        destructive: true,
         requires: [FILES],
         input: {
             local_path: z.string().describe('Absolute local file'),
@@ -505,14 +506,14 @@ export const driveApiTools = [
         handler: async ({ local_path, path, on_conflict }, { client, config, signal }) => {
             const local = resolveLocalPath(local_path, config.localRoots, { mustExist: true });
             const target = guardFolder(path, config.protectedPaths);
-            const data = await client.upload(FILES, 'upload', FILES_V, { path: JSON.stringify(target), conflict_action: JSON.stringify(on_conflict) }, { blob: await openAsBlob(local), filename: basename(local) }, { signal, timeoutMs: 1_800_000 });
+            const data = await client.upload(FILES, 'upload', FILES_V, { path: JSON.stringify(target), type: JSON.stringify('file'), conflict_action: JSON.stringify(on_conflict) }, { blob: await openAsBlob(local), filename: basename(local) }, { signal, timeoutMs: 1_800_000 });
             return { uploaded: basename(local), ...driveFileView(data.file ?? data) };
         },
     }),
     tool({
         name: 'drive_share',
         title: 'Drive sharing',
-        description: 'List who can open a Drive file, create its sharing link, or grant and revoke a role. Roles: viewer, commenter, editor, organizer, previewer, preview_commenter, denied. member_type is user or group.',
+        description: 'List who can open a Drive file, create its sharing link, or grant or revoke a role. link and grant preview first and need confirm=true. Roles: viewer, commenter, editor, organizer, previewer, preview_commenter, denied. member_type is user or group.',
         module: 'drive',
         tier: 'write',
         destructive: true,
@@ -523,16 +524,25 @@ export const driveApiTools = [
             role: z.enum(['viewer', 'commenter', 'editor', 'organizer', 'previewer', 'preview_commenter', 'denied']).optional(),
             member: z.string().optional().describe('DSM user or group name'),
             member_type: z.enum(['user', 'group']).default('user'),
+            confirm: z.boolean().default(false),
         },
-        handler: async ({ path, action, role, member, member_type }, { client, signal }) => {
+        handler: async ({ path, action, role, member, member_type, confirm }, { client, signal }) => {
             const target = drivePath(path);
             if (action === 'list')
                 return syno(client, 'SYNO.SynologyDrive.Sharing', 'list', 2, { path: target }, { signal });
-            if (action === 'link')
+            if (action === 'link') {
+                if (!confirm) {
+                    await syno(client, FILES, 'get', FILES_V, { path: target }, { signal });
+                    return confirmationNeeded({ would_create_link_for: target, warning: 'Whoever gets the link may be able to open this, depending on its sharing settings.' });
+                }
                 return syno(client, 'SYNO.SynologyDrive.Sharing', 'create_link', 2, { path: target }, { signal });
+            }
             need(member, 'member', action);
-            if (action === 'grant')
+            if (action === 'grant') {
                 need(role, 'role', action);
+                if (!confirm)
+                    return confirmationNeeded({ would_grant: { path: target, member, member_type, role } });
+            }
             await syno(client, 'SYNO.SynologyDrive.Sharing', 'update', 2, { path: target, permissions: [{ action: action === 'revoke' ? 'delete' : 'update', role, member: { type: member_type, name: member } }] }, { signal });
             return { path: target, action, member, role };
         },
@@ -558,7 +568,7 @@ export const driveApiTools = [
     tool({
         name: 'drive_requests',
         title: 'Drive file requests',
-        description: 'List, open, create, update or delete a file request (a link other people upload to). delete needs confirm=true. due is an ISO time. Passwords in replies are redacted.',
+        description: 'List, open, create, update or delete a file request (a public link other people upload to). create, update and delete preview first and need confirm=true. due is an ISO time. Passwords in replies are redacted.',
         module: 'drive',
         tier: 'write',
         destructive: true,
@@ -598,6 +608,13 @@ export const driveApiTools = [
                 due_date: due === undefined ? undefined : epoch(due),
                 protect_password: password,
             };
+            if (!confirm) {
+                const summary = { folder, title, description, due: due === undefined ? undefined : isoTime(epoch(due)), password_protected: Boolean(password) };
+                return confirmationNeeded({
+                    ...(action === 'create' ? { would_create: summary } : { would_update: { id, ...summary } }),
+                    warning: `Anyone with the link can upload files to this folder${password ? ', once they give the password' : ', with no password'}.`,
+                });
+            }
             const data = await syno(client, api, action === 'create' ? 'create' : 'update', 1, action === 'update' ? { ...body, sharing_link: id } : body, { signal });
             return redactSecrets(data);
         },
@@ -727,10 +744,10 @@ export const mailTools = [
     tool({
         name: 'mail_send',
         title: 'Send MailPlus email',
-        description: 'Send an email through MailPlus. Addresses are plain strings. Attachments are not in this tool: the published attachment object has no fields, so pass one with suite_call operation mail.Draft.send if you already know its shape.',
+        description: 'Send an email through MailPlus. The first call previews it; confirm=true sends, and it cannot be recalled. Addresses are plain strings. Attachments are not in this tool: the published attachment object has no fields, so pass one with suite_call operation mail.Draft.send if you know its shape.',
         module: 'mail',
         tier: 'write',
-        destructive: false,
+        destructive: true,
         requires: ['SYNO.MailClient.Draft'],
         input: {
             to: z.array(z.string().min(1)).min(1).max(100),
@@ -740,8 +757,12 @@ export const mailTools = [
             body: z.string().default(''),
             plain_text: z.boolean().default(true),
             from: z.string().optional(),
+            confirm: z.boolean().default(false),
         },
-        handler: async ({ to, cc, bcc, subject, body, plain_text, from }, { client, signal }) => {
+        handler: async ({ to, cc, bcc, subject, body, plain_text, from, confirm }, { client, signal }) => {
+            if (!confirm) {
+                return confirmationNeeded({ to, cc, bcc, from, subject, body_preview: body.slice(0, BODY_PREVIEW_CHARS), body_length: body.length, warning: 'An email cannot be recalled once sent.' });
+            }
             const data = await syno(client, 'SYNO.MailClient.Draft', 'send', 6, { to, cc, bcc, subject, body, is_plain: plain_text, from }, { signal, timeoutMs: 120_000 });
             return { sent: true, id: data.id };
         },
@@ -810,7 +831,7 @@ export const mailTools = [
     tool({
         name: 'mail_filter',
         title: 'Create or delete a mail filter',
-        description: 'Create, replace or delete a MailPlus filter. delete needs confirm=true. condition.name is from, to, subject, keyword, larger or smaller. action.name is move, forward, setlabel or setstar, and action.value is the mailbox id, address or label id.',
+        description: 'Create, replace or delete a MailPlus filter. delete, forwarding and apply_to_existing need confirm=true. condition.name is from, to, subject, keyword, larger or smaller. action.name is move, forward, setlabel or setstar, and action.value is the mailbox id, address or label id.',
         module: 'mail',
         tier: 'write',
         destructive: true,
@@ -839,6 +860,17 @@ export const mailTools = [
             if (action === 'update') {
                 need(id, 'id', action);
                 body.id = id;
+            }
+            // A forwarding rule keeps sending mail out on its own long after this conversation.
+            const forwards = actions.filter((item) => item.name.toLowerCase() === 'forward').map((item) => item.value);
+            if ((forwards.length > 0 || apply_to_existing) && !confirm) {
+                return confirmationNeeded({
+                    would: `${action} a mail filter`,
+                    conditions,
+                    actions,
+                    apply_to_existing,
+                    warning: forwards.length > 0 ? `Matching mail will keep being sent to ${forwards.join(', ')} automatically, until the filter is removed.` : 'This also changes mail already in the mailbox.',
+                });
             }
             const data = await syno(client, api, action === 'create' ? 'create' : 'set', 3, body, { signal });
             return { id: data.id ?? id, action };

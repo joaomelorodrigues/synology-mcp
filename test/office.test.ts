@@ -246,6 +246,63 @@ describe('Office tools over DSM', () => {
     expect((await harness.callRaw('office_update', { file: 'LINK123' })).isError).toBe(true);
   });
 
+  describe('restoring a version into another folder', () => {
+    beforeEach(() => {
+      fake.on(NODE, 'copy', () => ({ object_id: 'o5', link_id: 'COPY5', title: 'Budget.osheet' }));
+    });
+
+    it('copies it there, keeping the name and extension, and leaves the file alone', async () => {
+      const preview = await harness.call('office_version_action', { file: 'LINK123', version: VERSION_A, action: 'restore', to_folder: '/mydrive/Old' });
+      expect(preview.confirm_required).toBe(true);
+      expect(preview.warning).toBeUndefined();
+      expect(fake.callsTo(NODE, 'copy')).toHaveLength(0);
+
+      const result = await harness.call('office_version_action', { file: 'LINK123', version: VERSION_A, action: 'restore', to_folder: '/mydrive/Old', confirm: true });
+      expect(result).toMatchObject({ link_id: 'COPY5', title: 'Budget.osheet', copied_version: VERSION_A, to_folder: '/mydrive/Old' });
+      const call = fake.callsTo(NODE, 'copy')[0]!;
+      expect(call.version).toBe(2);
+      expect(call.params).toMatchObject({ ver: `"${VERSION_A}"`, to_parent_folder: '"/mydrive/Old"', title: '"Budget.osheet"', conflict_action: '"autorename"' });
+      expect(fake.callsTo('SYNO.Office.Node.Version', 'restore')).toHaveLength(0);
+    });
+
+    it('still restores in place without a folder, and no longer sends one to that API', async () => {
+      await harness.call('office_version_action', { file: 'LINK123', version: VERSION_A, action: 'restore', confirm: true });
+      expect(fake.callsTo('SYNO.Office.Node.Version', 'restore')[0]!.params.to_parent_folder).toBeUndefined();
+      expect(fake.callsTo(NODE, 'copy')).toHaveLength(0);
+    });
+  });
+
+  describe('office_file with a version', () => {
+    it('reports that version from the history, and never presents the current one as it', async () => {
+      const result = await harness.call('office_file', { file: 'LINK123', version: VERSION_A });
+      expect(result.requested_version).toMatchObject({ version: VERSION_A, author: 'bob', modified: '2023-11-14T22:13:20Z' });
+      expect(result.title).toBe('Budget.osheet');
+      expect(fake.callsTo(NODE, 'get')[0]!.params.ver).toBeUndefined();
+    });
+
+    it('says so when that version does not exist', async () => {
+      const { isError, text } = await harness.callRaw('office_file', { file: 'LINK123', version: 'c'.repeat(40) });
+      expect(isError).toBe(true);
+      expect(JSON.parse(text).error.kind).toBe('not_found');
+    });
+
+    it('does not read the history when no version is asked for', async () => {
+      const result = await harness.call('office_file', { file: 'LINK123' });
+      expect(result.requested_version).toBeUndefined();
+      expect(fake.callsTo('SYNO.Office.Node.Version', 'list')).toHaveLength(0);
+    });
+  });
+
+  it('asks before sharing a template', async () => {
+    fake.on('SYNO.Office.Template.Permission', 'set', () => ({}));
+    await harness.client.catalog({ refresh: true });
+    const preview = await harness.call('office_template_action', { action: 'share', id: 't1', perm: 'all' });
+    expect(preview.confirm_required).toBe(true);
+    expect(fake.callsTo('SYNO.Office.Template.Permission', 'set')).toHaveLength(0);
+    await harness.call('office_template_action', { action: 'share', id: 't1', perm: 'all', confirm: true });
+    expect(fake.callsTo('SYNO.Office.Template.Permission', 'set')).toHaveLength(1);
+  });
+
   it('asks before setting a new password or restoring a version', async () => {
     fake.on(NODE, 'set', () => ({}));
     const preview = await harness.call('office_update', { file: 'LINK123', new_password: 'x' });
@@ -337,6 +394,18 @@ describe('Office tools over DSM', () => {
       expect(preview.confirm_required).toBe(true);
       expect(fake.callsTo('SYNO.Office.Sheet.MruFc', 'create')).toHaveLength(0);
       await expect(harness.call('office_call', { api: 'SYNO.Office.Sheet.MruFc', method: 'create', params: { fc: 'SUM' }, confirm: true })).resolves.toEqual({ saved: true });
+    });
+
+    it('uses the version the client uses, since the newest one lacks most methods', async () => {
+      fake.on(NODE, 'copy', () => ({}));
+      await harness.call('office_call', { api: 'SYNO.Office.Node.Encrypt', method: 'check' });
+      expect(fake.callsTo('SYNO.Office.Node.Encrypt', 'check')[0]!.version).toBe(1);
+      await harness.call('office_call', { api: NODE, method: 'copy', confirm: true });
+      expect(fake.callsTo(NODE, 'copy')[0]!.version).toBe(2);
+      await harness.call('office_call', { api: 'SYNO.Office.Snapshot', method: 'get' });
+      expect(fake.callsTo('SYNO.Office.Snapshot', 'get')[0]!.version).toBe(3);
+      await harness.call('office_call', { api: 'SYNO.Office.Node.Encrypt', method: 'check', version: 4 });
+      expect(fake.callsTo('SYNO.Office.Node.Encrypt', 'check')[1]!.version).toBe(4);
     });
 
     it('reaches only Office APIs', async () => {

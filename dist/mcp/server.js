@@ -37,7 +37,7 @@ export const ALL_TOOLS = [
     ...surveillanceTools,
     ...genericTools,
 ];
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 export function buildInstructions(config, selection) {
     const names = new Set(selection.active.map((t) => t.name));
     const lines = [

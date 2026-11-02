@@ -44,7 +44,7 @@ export const ALL_TOOLS: readonly ToolDef[] = [
   ...genericTools,
 ];
 
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 
 export function buildInstructions(config: Config, selection: Selection): string {
   const names = new Set(selection.active.map((t) => t.name));

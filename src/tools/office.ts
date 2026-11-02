@@ -187,8 +187,26 @@ async function renameFile(client: DsmClient, file: string, wanted: string, passw
   });
 }
 
+/** Newest first. last_version is the version before each one, which the client compares against. */
+function versionViews(history: any): Record<string, unknown>[] {
+  return asList<any>(history.versions).map((v, index) => ({
+    version: v.version,
+    name: v.ver_name,
+    author: v.author?.name ?? v.author,
+    modified: isoTime(v.mtime),
+    editors: asList<any>(v.editors).map((editor) => editor?.name ?? editor),
+    current: index === 0 || undefined,
+    previous: asList<string>(v.last_version)[0],
+  }));
+}
+
+function loadHistory(client: DsmClient, objectId: unknown, signal: AbortSignal): Promise<any> {
+  return office(client, 'Node.Version', 'list', { object_id: objectId as string, additional: { uid: true, name: true, nickname: false } }, { signal });
+}
+
 function nodeResult(client: DsmClient, data: any): Record<string, unknown> {
-  const node = data.node ?? data;
+  // A copy answers with a list under data, as Synology's client reads it.
+  const node = (Array.isArray(data.data) ? data.data[0] : data.node) ?? data;
   const link = node.link_id ?? node.permanent_link;
   return {
     title: node.title,
@@ -202,6 +220,13 @@ function nodeResult(client: DsmClient, data: any): Record<string, unknown> {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const RENAME_CHECKS = 4;
 const RENAME_CHECK_INTERVAL_MS = 500;
+
+/** Versions the client calls. Everything else is v1: the newest version lacks most methods (103). */
+const CLIENT_VERSIONS: Record<string, number> = {
+  'SYNO.Office.Node/copy': 2,
+  'SYNO.Office.Snapshot/create': 2,
+  'SYNO.Office.Snapshot/get': 3,
+};
 
 const LOOKUPS = ['themes', 'locales', 'locale', 'default_locale', 'currencies', 'datetime_formats', 'dictionary', 'fonts', 'recent_functions', 'settings', 'person_settings', 'ui_settings', 'system_settings', 'doc_outline'] as const;
 
@@ -266,7 +291,7 @@ export const officeTools: ToolDef[] = [
   tool({
     name: 'office_file',
     title: 'Office file details',
-    description: 'Details of a Synology Office file: title, type, ids, owner, encryption, and a URL to open it.',
+    description: "Details of a Synology Office file: title, type, ids, owner, encryption, and a URL to open it. version adds that version's author, date and name under requested_version; everything else describes the current file. To read an older version, use office_snapshot or office_export.",
     module: 'office',
     tier: 'read',
     requires: [NODE],
@@ -277,10 +302,17 @@ export const officeTools: ToolDef[] = [
     },
     handler: async ({ file, version, password }, { client, signal }) => {
       const path = officePath(file);
-      const data = await office(client, 'Node', 'get', { path, basic: true, ver: version, password }, { signal });
+      // DSM answers this with the current file whatever version it is asked for, so a version
+      // comes from the history, where it can't be mistaken for the current one.
+      const data = await office(client, 'Node', 'get', { path, basic: true, password }, { signal });
       const node = data.node ?? data;
       const link = linkOf(node, path);
-      return { ...(redactSecrets(node) as object), link_id: link, open_url: link ? `${client.config.url}/oo/r/${link}` : undefined };
+      let requested: Record<string, unknown> | undefined;
+      if (version !== undefined) {
+        requested = versionViews(await loadHistory(client, node.object_id, signal)).find((view) => view.version === version);
+        if (!requested) throw new DsmError(`${node.title ?? file} has no version ${version}.`, { kind: 'not_found', hint: 'office_versions lists them.' });
+      }
+      return { ...(redactSecrets(node) as object), link_id: link, open_url: link ? `${client.config.url}/oo/r/${link}` : undefined, requested_version: requested };
     },
   }),
 
@@ -350,21 +382,8 @@ export const officeTools: ToolDef[] = [
     input: { file: fileParam, password: passwordParam },
     handler: async ({ file, password }, { client, signal }) => {
       const node = await loadNode(client, file, password, signal);
-      const data = await office(client, 'Node.Version', 'list', { object_id: node.object_id, additional: { uid: true, name: true, nickname: false } }, { signal });
-      return {
-        title: node.title,
-        total: data.total,
-        // Newest first. last_version is the version before this one, which the client compares against.
-        versions: asList<any>(data.versions).map((v, index) => ({
-          version: v.version,
-          name: v.ver_name,
-          author: v.author?.name ?? v.author,
-          modified: isoTime(v.mtime),
-          editors: asList<any>(v.editors).map((editor) => editor?.name ?? editor),
-          current: index === 0 || undefined,
-          previous: asList<string>(v.last_version)[0],
-        })),
-      };
+      const data = await loadHistory(client, node.object_id, signal);
+      return { title: node.title, total: data.total, versions: versionViews(data) };
     },
   }),
 
@@ -676,7 +695,7 @@ export const officeTools: ToolDef[] = [
   tool({
     name: 'office_version_action',
     title: 'Restore or name an Office version',
-    description: 'Restore an older version of an Office file, or give a version a name. Restoring needs confirm=true.',
+    description: 'Restore an older version of an Office file, or give a version a name. Restoring needs confirm=true. With to_folder, the version is saved as a copy in that folder and the file stays as it is.',
     module: 'office',
     tier: 'write',
     destructive: true,
@@ -687,7 +706,7 @@ export const officeTools: ToolDef[] = [
       action: z.enum(['restore', 'rename']),
       name: z.string().optional().describe('For rename'),
       overwrite: z.boolean().default(false).describe('For rename: reuse a name already taken'),
-      to_folder: z.string().optional().describe('For restore: save the version as a copy in this Drive folder'),
+      to_folder: z.string().optional().describe('For restore: save the version as a copy in this Drive folder instead'),
       password: passwordParam,
       confirm: z.boolean().default(false),
     },
@@ -698,15 +717,23 @@ export const officeTools: ToolDef[] = [
         await office(client, 'Node.Version', 'rename', { object_id: node.object_id, ver: version, ver_name: name, overwrite }, { signal });
         return { title: node.title, version, named: name };
       }
-      if (!confirm) {
-        return confirmationNeeded({
-          would_restore: node.title,
-          version,
-          to_folder,
-          warning: to_folder ? undefined : 'The current content is replaced, though it stays in the version history.',
-        });
+      if (to_folder) {
+        if (!confirm) return confirmationNeeded({ would_copy_version: version, of: node.title, to_folder });
+        // Node.Version.restore doesn't honor a folder: on a real NAS it made a file with no extension
+        // elsewhere. A copy of that version does, as the client's own "copy to" works.
+        const copy = await office(
+          client,
+          'Node',
+          'copy',
+          { path: node.link_id ? `link:${node.link_id}` : officePath(file), to_parent_folder: officePath(to_folder), title: node.title, ver: version, conflict_action: 'autorename', password, commit_msg: COMMIT },
+          { version: 2, signal, timeoutMs: 300_000 },
+        );
+        return { ...nodeResult(client, copy), copied_version: version, to_folder };
       }
-      const data = await office(client, 'Node.Version', 'restore', { object_id: node.object_id, ver: version, password, to_parent_folder: to_folder ? officePath(to_folder) : undefined }, { signal, timeoutMs: 300_000 });
+      if (!confirm) {
+        return confirmationNeeded({ would_restore: node.title, version, warning: 'The current content is replaced, though it stays in the version history.' });
+      }
+      const data = await office(client, 'Node.Version', 'restore', { object_id: node.object_id, ver: version, password }, { signal, timeoutMs: 300_000 });
       return { restored: node.title, version, result: redactSecrets(data) };
     },
   }),
@@ -744,7 +771,7 @@ export const officeTools: ToolDef[] = [
   tool({
     name: 'office_template_action',
     title: 'Manage Office templates',
-    description: 'make a template from an Office file (needs file and title), rename one, share one (perm is the permission value DSM expects), or delete one (needs confirm=true). id is a template object_id.',
+    description: 'make a template from an Office file (needs file and title), rename one, share one (perm is the permission value DSM expects; needs confirm=true), or delete one (needs confirm=true). id is a template object_id.',
     module: 'office',
     tier: 'write',
     destructive: true,
@@ -774,6 +801,7 @@ export const officeTools: ToolDef[] = [
       }
       if (action === 'share') {
         if (perm === undefined) throw new DsmError('action=share needs perm.', { kind: 'invalid_parameter' });
+        if (!confirm) return confirmationNeeded({ would_share_template: id, perm });
         await office(client, 'Template.Permission', 'set', { object_id: id, perm: perm as never }, { signal });
         return { shared: id };
       }
@@ -884,7 +912,7 @@ export const officeTools: ToolDef[] = [
         });
       }
       const data = await client.call(api, method, params as Params, {
-        version,
+        version: version ?? CLIENT_VERSIONS[`${api}/${method}`] ?? 1,
         write: !read,
         quoteStrings: true,
         signal,
