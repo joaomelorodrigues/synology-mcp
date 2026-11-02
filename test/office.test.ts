@@ -404,6 +404,24 @@ describe('Office tools over DSM', () => {
       await expect(harness.call('office_call', { api: 'SYNO.Office.Sheet.MruFc', method: 'create', params: { fc: 'SUM' }, confirm: true })).resolves.toEqual({ saved: true });
     });
 
+    it('reads a team folder the way the other tools do, wherever a call carries a path', async () => {
+      fake.on(NODE, 'copy', () => ({}));
+      fake.on('SYNO.Office.Node.Encrypt', 'check', () => ({}));
+      await harness.call('office_call', { api: 'SYNO.Office.Node.Encrypt', method: 'check', params: { path: '/Acme/Budget.osheet' } });
+      expect(fake.callsTo('SYNO.Office.Node.Encrypt', 'check')[0]!.params.path).toBe('"/team-folders/Acme/Budget.osheet"');
+
+      const params = { files: [{ path: '/Acme/Budget.osheet' }, { path: 'link:A' }], to_parent_folder: '/home/Drive/Out', title: '/Acme/Copy' };
+      const preview = await harness.call('office_call', { api: NODE, method: 'copy', params });
+      expect(preview.params.files[0].path).toBe('/team-folders/Acme/Budget.osheet');
+      expect(fake.callsTo(NODE, 'copy')).toHaveLength(0);
+
+      await harness.call('office_call', { api: NODE, method: 'copy', params, confirm: true });
+      const sent = fake.callsTo(NODE, 'copy')[0]!.params;
+      expect(sent.files).toBe('[{"path":"/team-folders/Acme/Budget.osheet"},{"path":"link:A"}]');
+      expect(sent.to_parent_folder).toBe('"/mydrive/Out"');
+      expect(sent.title).toBe('"/Acme/Copy"');
+    });
+
     it('uses the version the client uses, since the newest one lacks most methods', async () => {
       fake.on(NODE, 'copy', () => ({}));
       await harness.call('office_call', { api: 'SYNO.Office.Node.Encrypt', method: 'check' });

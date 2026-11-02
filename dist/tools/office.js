@@ -94,6 +94,15 @@ export function officePath(input) {
         hint: 'Find the file with drive_search; its reply has path and link_id.',
     });
 }
+const PATH_PARAMS = new Set(['path', 'to_parent_folder']);
+/** Translate File Station spellings in a raw call. link: and id: references and other values stay as given. */
+function withDrivePaths(value, key) {
+    if (Array.isArray(value))
+        return value.map((item) => withDrivePaths(item));
+    if (value && typeof value === 'object')
+        return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, withDrivePaths(item, name)]));
+    return typeof value === 'string' && PATH_PARAMS.has(key ?? '') && value.trim().startsWith('/') ? normalizeDrivePath(value) : value;
+}
 /** Office calls JSON-encode every value, as Synology's client does. */
 function office(client, suffix, method, params = {}, options = {}) {
     return client.call(`SYNO.Office.${suffix}`, method, params, { quoteStrings: true, version: 1, ...options });
@@ -838,11 +847,12 @@ export const officeTools = [
             params: z.record(z.string(), z.unknown()).default({}),
             confirm: z.boolean().default(false),
         },
-        handler: async ({ api, method, version, params, confirm }, { client, config, signal }) => {
+        handler: async ({ api, method, version, params: given, confirm }, { client, config, signal }) => {
             if (!api.startsWith('SYNO.Office') && api !== 'SYNO.SynologyDrive.Office') {
                 throw new DsmError(`${api} is not an Office API.`, { kind: 'refused', hint: 'For other DSM APIs use dsm_read or dsm_write.' });
             }
             assertCallAllowed(api, method, { allowPower: config.allowPower });
+            const params = withDrivePaths(given);
             const read = isReadMethod(method);
             if (!read && !confirm) {
                 return confirmationNeeded({
