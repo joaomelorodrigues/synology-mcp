@@ -36,6 +36,8 @@ export interface FakeOptions {
   /** When set, login needs this code or a known device token. */
   otp?: string;
   deviceToken?: string;
+  /** When set, login with any other session name gets 402, as DSM does for a non-administrator. */
+  allowedSessions?: string[];
   catalog?: Record<string, { minVersion: number; maxVersion: number; path?: string; requestFormat?: string }>;
   tls?: { key: string; cert: string };
 }
@@ -60,6 +62,7 @@ function parseMultipart(body: Buffer, boundary: string): { fields: Record<string
 export class FakeDsm {
   readonly calls: RecordedCall[] = [];
   readonly logins: Record<string, string>[] = [];
+  readonly logouts: Record<string, string>[] = [];
   readonly routes = new Map<string, Route>();
   /** Raw replies, for streams and binary data: return true when handled. */
   readonly rawRoutes = new Map<string, (res: ServerResponse, call: RecordedCall) => void>();
@@ -154,6 +157,7 @@ export class FakeDsm {
         this.logins.push(params);
         this.login(params, send);
       } else {
+        this.logouts.push(params);
         if (cookie) this.sessions.delete(cookie);
         send({ success: true });
       }
@@ -186,9 +190,13 @@ export class FakeDsm {
   }
 
   private login(params: Record<string, string>, send: (body: unknown) => void): void {
-    const { username = 'alice', password = 'secret', otp } = this.options;
+    const { username = 'alice', password = 'secret', otp, allowedSessions } = this.options;
     if (params.account !== username || params.passwd !== password) {
       send({ success: false, error: { code: 400 } });
+      return;
+    }
+    if (allowedSessions && !allowedSessions.includes(params.session ?? '')) {
+      send({ success: false, error: { code: 402 } });
       return;
     }
     let did: string | undefined;

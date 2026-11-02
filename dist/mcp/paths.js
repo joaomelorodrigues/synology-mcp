@@ -59,30 +59,30 @@ export function assertRemovable(path, protectedPaths) {
     }
     assertNotProtected(path, protectedPaths);
 }
-/** Resolve symlinks and `..`, then require the result to sit inside an allowed local folder. */
+/**
+ * Resolve symlinks and `..`, then require the result to sit inside an allowed local folder. That
+ * check comes before any answer about existence, so a caller can't use the difference between
+ * "refused" and "not found" to learn what exists outside those folders.
+ */
 export function resolveLocalPath(input, roots, options) {
     if (!isAbsolute(input))
         throw invalid(`Local path must be absolute; got "${input}".`);
     const absolute = resolve(input);
+    // Resolve the part that exists, so a symlink along the way can't lead out unnoticed.
+    let existing = absolute;
+    const missing = [];
     let real;
-    if (options.mustExist) {
+    while (true) {
         try {
-            real = realpathSync(absolute);
+            real = realpathSync(existing);
+            break;
         }
         catch {
-            throw new DsmError(`Local path does not exist: ${absolute}`, { kind: 'not_found' });
+            missing.unshift(basename(existing));
+            existing = dirname(existing);
         }
     }
-    else {
-        let parent = dirname(absolute);
-        try {
-            parent = realpathSync(parent);
-        }
-        catch {
-            throw new DsmError(`Local folder does not exist: ${parent}`, { kind: 'not_found' });
-        }
-        real = join(parent, basename(absolute));
-    }
+    const target = join(real, ...missing);
     const allowed = roots.flatMap((root) => {
         try {
             return [realpathSync(root)];
@@ -91,10 +91,16 @@ export function resolveLocalPath(input, roots, options) {
             return [];
         }
     });
-    if (!allowed.some((root) => real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`))) {
-        throw refused(`Local path "${real}" is outside the allowed folders (${roots.join(', ') || 'none'}).`, 'Add the folder to localRoots in the config.');
+    if (!allowed.some((root) => target === root || target.startsWith(root.endsWith(sep) ? root : `${root}${sep}`))) {
+        throw refused(`Local path "${absolute}" is outside the allowed folders (${roots.join(', ') || 'none'}).`, 'Add the folder to localRoots in the config.');
     }
-    return real;
+    if (options.mustExist && missing.length > 0) {
+        throw new DsmError(`Local path does not exist: ${absolute}`, { kind: 'not_found' });
+    }
+    if (missing.length > 1) {
+        throw new DsmError(`Local folder does not exist: ${dirname(absolute)}`, { kind: 'not_found' });
+    }
+    return target;
 }
 export function localFileSize(path) {
     return statSync(path).size;

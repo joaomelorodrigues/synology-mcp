@@ -2,9 +2,11 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFile
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { resolveLocalPath } from '../src/mcp/paths.js';
 import { summarizeStorage } from '../src/tools/storage.js';
 import { sanitizeDockerDetail } from '../src/tools/docker.js';
 import { assertCallAllowed } from '../src/tools/generic.js';
+import type { DsmError } from '../src/dsm/errors.js';
 import { DsmFailure, FakeDsm } from './fake-dsm.js';
 import { connect, type Harness } from './helpers.js';
 
@@ -238,6 +240,24 @@ describe('file tools', () => {
       expect(fake.callsTo(COPYMOVE, 'start').map((c) => c.params.remove_src)).toEqual(['false', 'true']);
     });
 
+    it.each([
+      [{ processed_size: 2048, total: 2048 }, '2.0 KiB'],
+      [{ processed_size: 0, total: 4096 }, '4.0 KiB'],
+      [{ processed_size: 0, total: 0 }, undefined],
+      [{ processed_size: 0, total: -1 }, undefined],
+      [{}, undefined],
+    ])('never claims 0 B for a copy when DSM reports %j', async (reported, size) => {
+      fake.on(COPYMOVE, 'status', () => ({ finished: true, skipstatus: { status: 'none' }, ...reported }));
+      const result = await harness.call('files_copy_move', { action: 'copy', paths: ['/docker/a'], destination: '/backup' });
+      expect(result.items[0].size).toBe(size);
+    });
+
+    it('reports no size for an item DSM skipped', async () => {
+      fake.on(COPYMOVE, 'status', () => ({ finished: true, total: 4096, skipstatus: { status: 'all' } }));
+      const result = await harness.call('files_copy_move', { action: 'copy', paths: ['/docker/a'], destination: '/backup' });
+      expect(result.items[0].size).toBeUndefined();
+    });
+
     it('reports items DSM skipped, which it only mentions in the status', async () => {
       fake.on(COPYMOVE, 'status', () => ({ finished: true, skipstatus: { status: 'all' } }));
       const result = await harness.call('files_copy_move', { action: 'copy', paths: ['/docker/a'], destination: '/backup' });
@@ -416,6 +436,42 @@ describe('file tools', () => {
       const again = await harness.callRaw('files_download', { path: '/docker/data.bin', local_path: root });
       expect(again.isError).toBe(true);
       expect(again.text).toContain('overwrite=true');
+    });
+
+    describe('what a refusal reveals', () => {
+      const attempt = (path: string, mustExist: boolean): { kind?: string; message: string } => {
+        try {
+          return { message: `allowed: ${resolveLocalPath(path, [root], { mustExist })}` };
+        } catch (error) {
+          return { kind: (error as DsmError).kind, message: (error as DsmError).message };
+        }
+      };
+
+      it.each([true, false])('answers the same for outside paths that do and do not exist (mustExist=%s)', (mustExist) => {
+        const present = attempt(join(outside, 'secret.txt'), mustExist);
+        const absent = attempt(join(outside, 'no-such-file.txt'), mustExist);
+        const absentFolder = attempt(join(outside, 'no-such-folder', 'file.txt'), mustExist);
+        for (const result of [present, absent, absentFolder]) {
+          expect(result.kind).toBe('refused');
+          expect(result.message).not.toContain('does not exist');
+        }
+      });
+
+      it('does the same beyond a symlink inside the allowed folder, without naming its target', () => {
+        symlinkSync(outside, join(root, 'door'));
+        for (const name of ['secret.txt', 'no-such-file.txt', 'no-such-folder/file.txt']) {
+          const result = attempt(join(root, 'door', name), true);
+          expect(result.kind, name).toBe('refused');
+          expect(result.message, name).not.toContain(outside);
+        }
+      });
+
+      it('still says when something is missing inside the allowed folder', () => {
+        expect(attempt(join(root, 'missing.txt'), true).kind).toBe('not_found');
+        expect(attempt(join(root, 'missing', 'file.txt'), false).kind).toBe('not_found');
+        expect(attempt(join(root, 'new.txt'), false).message).toBe(`allowed: ${join(root, 'new.txt')}`);
+        expect(attempt(root, true).message).toBe(`allowed: ${root}`);
+      });
     });
 
     it('will not download outside the allowed folder', async () => {

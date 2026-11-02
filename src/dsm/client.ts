@@ -112,14 +112,21 @@ export class DsmClient {
   private synoToken: string | undefined;
   private loginFlight: Promise<void> | undefined;
   private refusal: { fingerprint: string; error: DsmError } | undefined;
-  private readonly sessionName = `SynologyMCP_${randomBytes(4).toString('hex')}`;
+  private readonly sessionName: string;
+  /**
+   * DSM ends the session the cookie belongs to, whatever name a logout carries. This one matches
+   * nothing, so that it can never be read as "every webui session", which would include the
+   * user's own browser on the same account.
+   */
+  private readonly logoutName = `SynologyMCP_${randomBytes(4).toString('hex')}`;
 
   constructor(
-    readonly config: Pick<Config, 'url' | 'certFingerprint' | 'insecureTls' | 'timeoutMs' | 'deviceName'>,
+    readonly config: Pick<Config, 'url' | 'certFingerprint' | 'insecureTls' | 'timeoutMs' | 'deviceName'> & { sessionName?: string },
     private readonly credentials: Pick<CredentialProvider, 'resolve'>,
     private readonly stateRoot: string | false = stateDir(),
   ) {
     this.transports = buildTransports(config);
+    this.sessionName = config.sessionName ?? 'webui';
   }
 
   get loggedIn(): boolean {
@@ -314,6 +321,8 @@ export class DsmClient {
       hint = credentials.deviceId
         ? 'DSM no longer accepts the stored trusted-device token (it may have been removed in Personal > Security > Sign-in Activity). Call nas_auth_otp with a fresh 2FA code, or run `synology-mcp setup`.'
         : 'This account uses 2FA and no trusted-device token is stored. Call nas_auth_otp with a current 2FA code, or run `synology-mcp setup`.';
+    } else if (code === 402) {
+      hint = `DSM does not let this account log in with session name "${this.sessionName}". Check its access to DSM in Control Panel > Application Privileges, or set sessionName in the config.`;
     } else if (code === 407) {
       hint = base.hint ?? '';
     } else {
@@ -362,7 +371,7 @@ export class DsmClient {
           api: 'SYNO.API.Auth',
           version: String(Math.min(6, entry.maxVersion)),
           method: 'logout',
-          session: this.sessionName,
+          session: this.logoutName,
         }),
         dispatcher: this.transports.single,
         signal: AbortSignal.timeout(5_000),

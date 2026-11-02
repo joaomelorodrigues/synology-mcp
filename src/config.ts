@@ -50,6 +50,8 @@ const fileSchema = z.strictObject({
   /** NAS paths that no tool may change or delete, at or below the given path. */
   protectedPaths: z.array(z.string()).optional(),
   deviceName: z.string().min(1).optional(),
+  /** Session name sent at login. DSM refuses names it doesn't know for non-administrators (402). */
+  sessionName: z.string().min(1).optional(),
   maxOutputChars: z.number().int().min(1000).max(2_000_000).optional(),
   /** Extra guidance prepended to the server's instructions. */
   instructions: z.string().optional(),
@@ -69,6 +71,7 @@ export interface Config {
   localRoots: string[];
   protectedPaths: string[];
   deviceName: string;
+  sessionName: string;
   maxOutputChars: number;
   instructions?: string;
   /** Where the file was read from, or would be written to. */
@@ -180,6 +183,7 @@ export function loadConfig(options: { path?: string; env?: NodeJS.ProcessEnv; al
     localRoots: (envList(env.SYNOLOGY_LOCAL_ROOTS) ?? file.localRoots ?? ['~/Downloads']).map(expandHome),
     protectedPaths: envList(env.SYNOLOGY_PROTECTED_PATHS) ?? file.protectedPaths ?? [],
     deviceName: env.SYNOLOGY_DEVICE_NAME ?? file.deviceName ?? 'synology-mcp',
+    sessionName: env.SYNOLOGY_SESSION_NAME ?? file.sessionName ?? 'webui',
     maxOutputChars: env.SYNOLOGY_MAX_OUTPUT_CHARS ? Number(env.SYNOLOGY_MAX_OUTPUT_CHARS) : (file.maxOutputChars ?? 40_000),
     instructions: file.instructions,
     configPath,

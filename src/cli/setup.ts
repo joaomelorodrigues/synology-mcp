@@ -175,7 +175,7 @@ export async function runSetup(argv: string[]): Promise<void> {
   const store = defaultStore();
   const candidate = { username, password };
   const client = new DsmClient(
-    { url, certFingerprint, insecureTls: false, timeoutMs: 30_000, deviceName: existing.deviceName },
+    { url, certFingerprint, insecureTls: false, timeoutMs: 30_000, deviceName: existing.deviceName, sessionName: existing.sessionName },
     { resolve: async () => candidate },
     false,
   );

@@ -2,7 +2,7 @@
 
 MCP server for managing a Synology NAS (DSM 7) from Claude or any other MCP client: system health, disks, files, Container Manager, accounts, security, Photos, Drive and any other DSM API your NAS offers.
 
-**Status: early (0.1.0).** It is tested against a simulated DSM. On a real NAS, only API discovery and certificate pinning have been confirmed so far, without logging in. See [Verification status](#verification-status).
+**Status: early (0.1.1).** A test on a real NAS with a non-administrator account confirmed the file tools and Drive search. Tools that need an administrator (system, storage, accounts) and Photos have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
 
 - **Only the tools that apply.** At startup the server reads the NAS's own API list (`SYNO.API.Info`, no login needed) and hides whatever isn't installed, so a package you don't have costs no context.
 - **2FA without repeated codes.** `setup` exchanges one code for a trusted-device token, stored in the Keychain.
@@ -80,6 +80,7 @@ Settings live in `~/.config/synology-mcp/config.json`, which holds no secrets. E
 | `protectedPaths` | NAS paths that no tool may change or delete |
 | `instructions` | Extra text for the model about this NAS |
 | `maxOutputChars` | Maximum size of a reply; 40,000 by default |
+| `sessionName` | Session name sent at login; `webui` by default. DSM refuses names it doesn't know for non-administrator accounts |
 
 The server reads its settings at startup, so restart your MCP client after changing them.
 
@@ -141,6 +142,7 @@ The endpoint is `http://127.0.0.1:8765/mcp`. Beyond loopback, the server refuses
 | `Could not reach the NAS` | Check the network or VPN path to the NAS |
 | `different TLS certificate` | If you replaced the certificate, run `trust-cert`. If you didn't, stop there |
 | `DSM refused the login` | Fix it with `setup`. The server won't try again until the credentials change or it restarts |
+| `DSM refused the login` with code 402 | The account can't log in with this session name. Check its access to DSM in Control Panel > Application Privileges, or set `sessionName` |
 | `blocked by DSM Auto Block` | Remove the IP in Control Panel > Security > Protection, then restart the server |
 | `permission_denied` (105) | Most system and storage APIs need an administrator account |
 | A tool doesn't appear | Ask the model to call `nas_capabilities`, which says why it's hidden |
@@ -162,9 +164,10 @@ The code is split into `src/dsm` (DSM client: session, TLS, errors), `src/mcp` (
 
 ### Verification status
 
-The tests cover the server's behavior against a simulated DSM. On a real NAS, only API discovery and certificate pinning have been confirmed, without logging in. The shape of the calls comes from the reference projects below, which tested them on DSM 7.x, but it still needs confirming with a login:
+The tests cover the server's behavior against a simulated DSM. On a real NAS, with a non-administrator account, these have been confirmed: login, listing, searching, reading, downloading, writing, uploading, copying, renaming and deleting files, creating folders, and searching Drive. The shape of the other calls comes from the reference projects below, which tested them on DSM 7.x, but it still needs confirming:
 
-- Read tools can be confirmed with `doctor`. Some have no equivalent in the references, so watch those first: `security_login_activity`, `drive_labels`, and `photos_items` with no source given.
+- Read tools can be confirmed with `doctor`, using an administrator account for system, storage and accounts. Some have no equivalent in the references, so watch those first: `security_login_activity`, `drive_labels`, and `photos_items` with no source given.
+- The 2FA flow can be confirmed by running `setup` on an account that uses it.
 - Write tools can only be confirmed by using them. Try them on unimportant data first, especially `files_compress`, which also has no equivalent in the references.
 
 ### References

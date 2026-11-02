@@ -46,6 +46,30 @@ describe('DSM client', () => {
     expect(fake.calls[0]!.url).toBe('/webapi/entry.cgi');
   });
 
+  it('logs in as webui, since DSM refuses other session names for non-administrators', async () => {
+    await setup({ allowedSessions: ['webui'] });
+    fake.on(INFO, 'get', () => ({ ok: true }));
+    await expect(client.call(INFO, 'get')).resolves.toEqual({ ok: true });
+    expect(fake.logins[0]!.session).toBe('webui');
+  });
+
+  it('uses a configured session name, and explains a 402 without retrying', async () => {
+    fake = await new FakeDsm({ allowedSessions: ['webui'] }).start();
+    client = new DsmClient(
+      { url: fake.url, timeoutMs: 3_000, deviceName: 'test', insecureTls: false, sessionName: 'FileStation' },
+      { resolve: async () => ({ username: 'alice', password: 'secret' }) },
+      false,
+    );
+    fake.on(INFO, 'get', () => ({}));
+    const error = (await client.call(INFO, 'get').catch((e) => e)) as DsmError;
+    expect(fake.logins[0]!.session).toBe('FileStation');
+    expect(error.code).toBe(402);
+    expect(error.hint).toContain('sessionName');
+    expect(error.hint).toContain('Application Privileges');
+    await client.call(INFO, 'get').catch(() => undefined);
+    expect(fake.logins).toHaveLength(1);
+  });
+
   it('sends the session as a cookie with the CSRF token, never as _sid', async () => {
     await setup();
     fake.on(INFO, 'get', () => ({}));
@@ -250,13 +274,15 @@ describe('DSM client', () => {
     expect(attempts).toBe(2);
   });
 
-  it('ends the session on close', async () => {
+  it('ends only its own session on close, by its cookie and without naming webui', async () => {
     await setup();
     fake.on(INFO, 'get', () => ({}));
     await client.call(INFO, 'get');
     expect(fake.sessions.size).toBe(1);
     await client.logout();
     expect(fake.sessions.size).toBe(0);
+    // A browser logged in to the same account also has session webui.
+    expect(fake.logouts[0]!.session).not.toBe('webui');
   });
 
   it('treats a Container Manager stream by its final exit code', async () => {

@@ -160,6 +160,12 @@ function assertTaskSucceeded(api: string, status: any, path: string): void {
   }
 }
 
+/** A task's byte count. DSM reports 0 or -1 when it has no figure, even after copying data. */
+function reportedSize(...values: unknown[]): string | undefined {
+  const size = Math.max(0, ...values.map((value) => Number(value) || 0));
+  return size > 0 ? bytes(size) : undefined;
+}
+
 function fileView(file: any): Record<string, unknown> {
   const add = file.additional ?? {};
   return {
@@ -714,7 +720,11 @@ export const fileTools: ToolDef[] = [
         assertTaskSucceeded(COPYMOVE, result.status, path);
         const skip = result.status.skipstatus;
         const skipped = ![undefined, null, '', 'none'].includes(typeof skip === 'object' && skip ? skip.status : skip);
-        done.push({ path, size: bytes(result.status.processed_size), skipped: skipped || undefined });
+        done.push({
+          path,
+          size: skipped ? undefined : reportedSize(result.status.processed_size, result.status.total),
+          skipped: skipped || undefined,
+        });
       }
       const anySkipped = done.some((d) => d.skipped);
       return {
@@ -902,8 +912,8 @@ export const fileTools: ToolDef[] = [
         handle,
         finished: Boolean(status.finished),
         progress: status.progress,
-        processed: bytes(status.processed_size),
-        total: bytes(status.total),
+        processed: reportedSize(status.processed_size),
+        total: reportedSize(status.total),
         current: status.processing_path ?? status.path,
       };
     },

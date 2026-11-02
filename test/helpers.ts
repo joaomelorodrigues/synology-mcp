@@ -35,6 +35,7 @@ export function testConfig(fake: FakeDsm, overrides: Partial<Config> = {}): Conf
     localRoots: [],
     protectedPaths: [],
     deviceName: 'test',
+    sessionName: 'webui',
     maxOutputChars: 40_000,
     configPath: '/nonexistent/config.json',
     ...overrides,

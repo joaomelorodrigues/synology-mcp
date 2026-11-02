@@ -169,7 +169,7 @@ export async function runSetup(argv) {
     const instance = instanceKey(url);
     const store = defaultStore();
     const candidate = { username, password };
-    const client = new DsmClient({ url, certFingerprint, insecureTls: false, timeoutMs: 30_000, deviceName: existing.deviceName }, { resolve: async () => candidate }, false);
+    const client = new DsmClient({ url, certFingerprint, insecureTls: false, timeoutMs: 30_000, deviceName: existing.deviceName, sessionName: existing.sessionName }, { resolve: async () => candidate }, false);
     // With --otp the code goes first; otherwise DSM's answer says whether this account uses 2FA.
     let otp = values.otp;
     let deviceToken;
