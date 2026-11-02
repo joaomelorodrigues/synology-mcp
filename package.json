@@ -1,0 +1,41 @@
+{
+  "name": "synology-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Synology DSM 7: system, storage, files, Container Manager, accounts, security, Photos, Drive and any other DSM API.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "synology-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/index.js serve",
+    "setup": "node dist/index.js setup",
+    "doctor": "node dist/index.js doctor",
+    "pretest": "npm run compile",
+    "compile": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "undici": "^7.30.1",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joaomelorodrigues/synology-mcp.git"
+  },
+  "homepage": "https://github.com/joaomelorodrigues/synology-mcp#readme"
+}
