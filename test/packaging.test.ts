@@ -26,6 +26,12 @@ describe('installing from GitHub', () => {
     }
   });
 
+  it('publishes the Spreadsheet API container on loopback only', () => {
+    const compose = readFileSync('docker-compose.spreadsheet.yml', 'utf8');
+    expect(compose).toContain('"127.0.0.1:3000:3000"');
+    expect(compose).not.toMatch(/^\s*- "3000:3000"/m);
+  });
+
   it('keeps dist out of .gitignore, and ships it', () => {
     expect(readFileSync('.gitignore', 'utf8')).not.toMatch(/^dist\/?$/m);
     const [report] = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { encoding: 'utf8' }));

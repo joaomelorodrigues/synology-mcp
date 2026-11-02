@@ -13,6 +13,16 @@ import { fetch } from 'undici';
 import { DsmError } from './errors.js';
 import { buildTransports } from './tls.js';
 const API = 'Spreadsheet API';
+/** The DSM password goes to this address, so it may travel in the clear only within this machine. */
+export function assertSafeSpreadsheetUrl(url) {
+    const { protocol, hostname } = new URL(url);
+    if (protocol === 'https:' || hostname === 'localhost' || hostname === '[::1]' || /^127\./.test(hostname))
+        return;
+    throw new DsmError(`Refusing to send a DSM password to ${url} over plain HTTP.`, {
+        kind: 'refused',
+        hint: 'Put an HTTPS reverse proxy in front of the container (Control Panel > Login Portal > Advanced > Reverse Proxy), or reach it through an SSH tunnel at http://127.0.0.1:<port>.',
+    });
+}
 function kindForStatus(status) {
     if (status === 400 || status === 422)
         return 'invalid_parameter';
@@ -77,6 +87,7 @@ export class SpreadsheetClient {
     }
     /** Get a token from the container. It logs in to DSM with these credentials to issue one. */
     async authorize() {
+        assertSafeSpreadsheetUrl(this.options.url);
         const login = await this.login();
         if (!login) {
             throw new DsmError('No password is stored for the Spreadsheet API account.', { kind: 'auth_failed', hint: 'Run `synology-mcp spreadsheet-setup`.' });

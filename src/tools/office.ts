@@ -20,13 +20,14 @@ const NODE = 'SYNO.Office.Node';
 
 export interface OfficeApiInfo {
   methods: string;
-  /** Used by the client but absent from SYNO.API.Info. */
-  unlisted?: boolean;
   /** Dedicated tool, or why there is none. */
   via?: string;
 }
 
-/** What Synology's own client calls, as `method(params)`. This is the map office_apis returns. */
+/**
+ * What Synology's own client calls, as `method(params)`. This is the map office_apis returns. The
+ * client also names APIs that a NAS may not offer: only what SYNO.API.Info lists can be called.
+ */
 export const OFFICE_APIS: Record<string, OfficeApiInfo> = {
   'SYNO.Office.Info': { methods: 'get', via: 'office_status' },
   'SYNO.Office.Info.Constants': { methods: 'get', via: 'office_status' },
@@ -44,9 +45,9 @@ export const OFFICE_APIS: Record<string, OfficeApiInfo> = {
   'SYNO.Office.Snapshot': { methods: 'create v2(link_id); get v3(link_id)', via: 'office_read_text, office_snapshot' },
   'SYNO.Office.Sheet.Snapshot': { methods: 'get(object_id,sharing_token); copy_images(object_id,to_object_id,to_password,file_ids)', via: 'office_snapshot, office_call' },
   'SYNO.Office.Sheet.Snapshot.History': { methods: 'get(object_id,ver)', via: 'office_snapshot' },
-  'SYNO.Office.Sheet.Snapshot.Worksheet': { methods: 'copy_new(object_id,sheet_id,path,title)', unlisted: true, via: 'office_sheet_copy' },
+  'SYNO.Office.Sheet.Snapshot.Worksheet': { methods: 'copy_new(object_id,sheet_id,path,title)', via: 'office_sheet_copy' },
   'SYNO.Office.Sheet.MruFc': { methods: 'list; create(fc)', via: 'office_lookup, office_call' },
-  'SYNO.Office.Doc.Outline': { methods: 'get(object_id); set(object_id,outline)', unlisted: true, via: 'office_lookup, office_call' },
+  'SYNO.Office.Doc.Outline': { methods: 'get(object_id); set(object_id,outline)', via: 'office_lookup, office_call' },
   'SYNO.Office.Export': { methods: 'download(path|object_id,format,ver,password)', via: 'office_export' },
   'SYNO.Office.Import': { methods: 'check(files|path,password); start(files); status(task_id); stop(task_id); convert(files,conflict_action,to_parent_folder)', via: 'office_call. office_import uses Drive\'s convert_office, as the client does' },
   'SYNO.Office.Template': { methods: 'list(ntype | field,mode,limit); get(object_id,field); make(object_id,title,default_title,password,encrypt,parent_id,ver); set(object_id,title); delete(object_id); request(object_id); save and publish (multipart with a thumbnail)', via: 'office_templates, office_template_action. save and publish have no tool' },
@@ -66,7 +67,7 @@ export const OFFICE_APIS: Record<string, OfficeApiInfo> = {
   'SYNO.Office.Video.Thumb': { methods: 'get(path)', via: 'office_media_download' },
   'SYNO.Office.Log': { methods: 'create(event,ntype,object_id,msg)', via: 'office_call. Client telemetry' },
   'SYNO.Office.UserStatistics.Event': { methods: 'create(events)', via: 'office_call. Client telemetry' },
-  'SYNO.Office.Cluster.Status': { methods: 'check(link_id,object_id)', unlisted: true, via: 'office_call' },
+  'SYNO.Office.Cluster.Status': { methods: 'check(link_id,object_id)', via: 'office_call' },
   'SYNO.Office.Shard.Framework': { methods: 'init', via: 'office_call. Internal to the web client' },
   'SYNO.Office.Shard.Def': { methods: 'get', via: 'office_call. Internal to the web client' },
   'SYNO.Office.Shard.Info': { methods: 'get(additional)', via: 'office_call. Internal to the web client' },
@@ -75,20 +76,15 @@ export const OFFICE_APIS: Record<string, OfficeApiInfo> = {
   'SYNO.Office.Shard.Type': { methods: 'get(link_id)', via: 'office_call. Internal to the web client' },
 };
 
-/** APIs that work though DSM's list omits them. */
-export const OFFICE_UNLISTED: ReadonlySet<string> = new Set(
-  Object.entries(OFFICE_APIS)
-    .filter(([, info]) => info.unlisted)
-    .map(([api]) => api),
-);
-
 const NTYPES = ['sheet', 'doc', 'presentation'] as const;
 const MS_EXTENSION = { sheet: 'xlsx', doc: 'docx', presentation: 'pptx' } as const;
 const ODF_EXTENSION = { sheet: 'ods', doc: 'odt', presentation: 'odp' } as const;
 const OFFICE_EXTENSION: Record<string, (typeof NTYPES)[number]> = { osheet: 'sheet', odoc: 'doc', oslides: 'presentation' };
+const TYPE_EXTENSION = { sheet: '.osheet', doc: '.odoc', presentation: '.oslides' } as const;
 
 const fileParam = z.string().describe('A Drive path such as /mydrive/Budget.osheet, a link_id from drive_list or drive_search, or an /oo/r/ URL');
 const passwordParam = z.string().optional().describe('Only for an encrypted document. It passes through this conversation');
+const versionParam = z.string().min(1).describe('A version id from office_versions, a 40-character hash');
 const COMMIT = { device: 'desktop' };
 
 /** How the Office APIs address a file: `link:<id>`, `id:<id>` or a path. */
@@ -161,6 +157,36 @@ function localTarget(localPath: string, name: string, roots: readonly string[], 
   return destination;
 }
 
+/**
+ * Rename through Drive, as Synology's client does: Node.set accepts a title and ignores it, while
+ * answering success. So the result is read back, and only a name DSM shows counts as done.
+ */
+async function renameFile(client: DsmClient, file: string, wanted: string, password: string | undefined, signal: AbortSignal): Promise<string> {
+  if (wanted.includes('/')) throw new DsmError('The new title must be a name, not a path.', { kind: 'invalid_parameter' });
+  const node = await loadNode(client, file, password, signal);
+  // The name includes the extension. Without it the file would stop being an Office file.
+  const type = typeOf(node, file);
+  const extension = /\.(osheet|odoc|oslides)$/.exec(String(node.title ?? ''))?.[0] ?? (type ? TYPE_EXTENSION[type] : '');
+  const name = wanted.endsWith(extension) ? wanted : `${wanted}${extension}`;
+  // A path stops pointing at the file once it is renamed; its link doesn't.
+  const stable = node.link_id ? `link:${node.link_id}` : officePath(file);
+  await client.call('SYNO.SynologyDrive.Files', 'update', { path: stable, name }, { version: 2, quoteStrings: true, signal });
+
+  let current = node.title;
+  for (let attempt = 0; attempt < RENAME_CHECKS; attempt += 1) {
+    if (attempt > 0) await sleep(RENAME_CHECK_INTERVAL_MS);
+    current = (await loadNode(client, stable, password, signal)).title;
+    if (displayName(current, '') === displayName(name, '')) return name;
+  }
+  throw new DsmError(`DSM accepted the rename, but the file is still called "${current}".`, {
+    kind: 'dsm_error',
+    api: 'SYNO.SynologyDrive.Files',
+    method: 'update',
+    outcomeUnknown: true,
+    hint: 'Check its name with office_file in a moment before trying again.',
+  });
+}
+
 function nodeResult(client: DsmClient, data: any): Record<string, unknown> {
   const node = data.node ?? data;
   const link = node.link_id ?? node.permanent_link;
@@ -174,6 +200,8 @@ function nodeResult(client: DsmClient, data: any): Record<string, unknown> {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const RENAME_CHECKS = 4;
+const RENAME_CHECK_INTERVAL_MS = 500;
 
 const LOOKUPS = ['themes', 'locales', 'locale', 'default_locale', 'currencies', 'datetime_formats', 'dictionary', 'fonts', 'recent_functions', 'settings', 'person_settings', 'ui_settings', 'system_settings', 'doc_outline'] as const;
 
@@ -219,14 +247,14 @@ export const officeTools: ToolDef[] = [
       const catalog = await client.catalog();
       const names = new Set([...Object.keys(OFFICE_APIS), ...[...catalog.keys()].filter((name) => name.startsWith('SYNO.Office'))]);
       return {
-        note: 'Synology does not document these. Methods come from the web client that Synology Office serves.',
+        note: "Synology does not document these. Methods come from the web client that Synology Office serves. That client also names some APIs a NAS does not offer: those marked not_on_this_nas can't be called here.",
         apis: [...names].sort().map((name) => {
           const entry = catalog.get(name);
           const known = OFFICE_APIS[name];
           return {
             api: name,
             versions: entry ? `${entry.minVersion}-${entry.maxVersion}` : undefined,
-            not_listed_by_dsm: entry ? undefined : true,
+            not_on_this_nas: entry ? undefined : true,
             methods: known?.methods ?? "unknown: Synology's client does not call it. dsm_read can try get or list",
             via: known?.via,
           };
@@ -244,7 +272,7 @@ export const officeTools: ToolDef[] = [
     requires: [NODE],
     input: {
       file: fileParam,
-      version: z.number().int().optional().describe('A version from office_versions'),
+      version: versionParam.optional(),
       password: passwordParam,
     },
     handler: async ({ file, version, password }, { client, signal }) => {
@@ -296,7 +324,7 @@ export const officeTools: ToolDef[] = [
     requires: ['SYNO.Office.Sheet.Snapshot'],
     input: {
       file: fileParam,
-      version: z.number().int().optional(),
+      version: versionParam.optional(),
       password: passwordParam,
     },
     handler: async ({ file, version, password }, { client, signal }) => {
@@ -326,13 +354,15 @@ export const officeTools: ToolDef[] = [
       return {
         title: node.title,
         total: data.total,
-        versions: asList<any>(data.versions).map((v) => ({
+        // Newest first. last_version is the version before this one, which the client compares against.
+        versions: asList<any>(data.versions).map((v, index) => ({
           version: v.version,
           name: v.ver_name,
           author: v.author?.name ?? v.author,
           modified: isoTime(v.mtime),
           editors: asList<any>(v.editors).map((editor) => editor?.name ?? editor),
-          current: v.last_version || undefined,
+          current: index === 0 || undefined,
+          previous: asList<string>(v.last_version)[0],
         })),
       };
     },
@@ -415,8 +445,11 @@ export const officeTools: ToolDef[] = [
           return office(client, 'Setting.System', 'get', {}, options);
         default: {
           if (!file) throw new DsmError(`kind=${kind} needs file.`, { kind: 'invalid_parameter' });
+          if (kind === 'doc_outline' && !client.has('SYNO.Office.Doc.Outline')) {
+            throw new DsmError('This NAS does not offer document outlines.', { kind: 'not_supported' });
+          }
           const node = await loadNode(client, file, undefined, signal);
-          if (kind === 'doc_outline') return office(client, 'Doc.Outline', 'get', { object_id: node.object_id }, { signal, unlisted: true });
+          if (kind === 'doc_outline') return office(client, 'Doc.Outline', 'get', { object_id: node.object_id }, options);
           return office(client, kind === 'person_settings' ? 'Setting.Person' : 'Setting.UI', 'get', { object_id: node.object_id }, options);
         }
       }
@@ -436,7 +469,7 @@ export const officeTools: ToolDef[] = [
       file: fileParam,
       local_path: z.string().describe('Absolute local file or existing folder'),
       format: z.enum(['ms', 'odf']).default('ms'),
-      version: z.number().int().optional(),
+      version: versionParam.optional(),
       password: passwordParam,
       overwrite: z.boolean().default(false),
     },
@@ -471,7 +504,7 @@ export const officeTools: ToolDef[] = [
       local_path: z.string().describe('Absolute local file path'),
       file: fileParam.optional(),
       id: z.string().optional(),
-      version: z.number().int().optional(),
+      version: versionParam.optional(),
       type: z.enum(NTYPES).default('presentation'),
       overwrite: z.boolean().default(false),
     },
@@ -583,7 +616,7 @@ export const officeTools: ToolDef[] = [
       file: fileParam,
       title: z.string().optional(),
       to_folder: z.string().optional().describe('Destination Drive folder; by default next to the original'),
-      version: z.number().int().optional(),
+      version: versionParam.optional(),
       comment: z.string().optional(),
       on_conflict: z.enum(['autorename', 'skip', 'version']).default('autorename'),
       password: passwordParam,
@@ -603,11 +636,11 @@ export const officeTools: ToolDef[] = [
   tool({
     name: 'office_update',
     title: 'Rename or re-lock an Office file',
-    description: "Rename an Office file, change its locale, or change its password. A new password can't be recovered if lost, so that needs confirm=true.",
+    description: "Rename an Office file, change its locale, or change its password. A rename is confirmed by reading the file back. A new password can't be recovered if lost, so that needs confirm=true.",
     module: 'office',
     tier: 'write',
     destructive: true,
-    requires: [NODE],
+    requires: [NODE, 'SYNO.SynologyDrive.Files'],
     input: {
       file: fileParam,
       title: z.string().optional(),
@@ -623,8 +656,20 @@ export const officeTools: ToolDef[] = [
       if (new_password !== undefined && !confirm) {
         return confirmationNeeded({ would_change_password_of: file, warning: 'If this password is lost, the document cannot be opened again.' });
       }
-      await office(client, 'Node', 'set', { path: officePath(file), title, locale, password, new_password, commit_msg: COMMIT }, { signal });
-      return { updated: file, title, locale, password_changed: new_password !== undefined || undefined };
+      if (new_password !== undefined) {
+        await office(client, 'Node', 'set', { path: officePath(file), password, new_password, commit_msg: COMMIT }, { signal });
+      }
+      if (locale !== undefined) {
+        const node = await loadNode(client, file, new_password ?? password, signal);
+        await office(client, 'Node', 'set', { object_id: node.object_id, locale, password: new_password ?? password, commit_msg: COMMIT }, { signal });
+      }
+      const renamed = title === undefined ? undefined : await renameFile(client, file, title, new_password ?? password, signal);
+      return {
+        updated: renamed ?? file,
+        confirmed: renamed ? true : undefined,
+        locale,
+        password_changed: new_password !== undefined || undefined,
+      };
     },
   }),
 
@@ -638,7 +683,7 @@ export const officeTools: ToolDef[] = [
     requires: ['SYNO.Office.Node.Version'],
     input: {
       file: fileParam,
-      version: z.number().int().describe('A version from office_versions'),
+      version: versionParam,
       action: z.enum(['restore', 'rename']),
       name: z.string().optional().describe('For rename'),
       overwrite: z.boolean().default(false).describe('For rename: reuse a name already taken'),
@@ -709,7 +754,7 @@ export const officeTools: ToolDef[] = [
       file: fileParam.optional(),
       id: z.string().optional(),
       title: z.string().optional(),
-      version: z.number().int().optional(),
+      version: versionParam.optional(),
       perm: z.unknown().optional(),
       password: passwordParam,
       confirm: z.boolean().default(false),
@@ -795,7 +840,7 @@ export const officeTools: ToolDef[] = [
     module: 'office',
     tier: 'write',
     destructive: false,
-    requires: [NODE],
+    requires: [NODE, 'SYNO.Office.Sheet.Snapshot.Worksheet'],
     input: {
       file: fileParam,
       sheet_id: z.string(),
@@ -805,7 +850,7 @@ export const officeTools: ToolDef[] = [
     },
     handler: async ({ file, sheet_id, title, folder, password }, { client, signal }) => {
       const node = await loadNode(client, file, password, signal);
-      const data = await office(client, 'Sheet.Snapshot.Worksheet', 'copy_new', { object_id: node.object_id, sheet_id, path: officePath(folder), title }, { signal, unlisted: true, timeoutMs: 120_000 });
+      const data = await office(client, 'Sheet.Snapshot.Worksheet', 'copy_new', { object_id: node.object_id, sheet_id, path: officePath(folder), title }, { signal, timeoutMs: 120_000 });
       return nodeResult(client, data);
     },
   }),
@@ -839,10 +884,9 @@ export const officeTools: ToolDef[] = [
         });
       }
       const data = await client.call(api, method, params as Params, {
-        version: version ?? (OFFICE_UNLISTED.has(api) ? 1 : undefined),
+        version,
         write: !read,
         quoteStrings: true,
-        unlisted: OFFICE_UNLISTED.has(api),
         signal,
         timeoutMs: 120_000,
       });

@@ -2,7 +2,7 @@
 
 MCP server for managing a Synology NAS (DSM 7) from Claude or any other MCP client: system health, disks, files, Container Manager, accounts, security, Photos, Drive, Synology Office and any other DSM API your NAS offers.
 
-**Status: early (0.2.0).** A test on a real NAS with a non-administrator account confirmed the file tools and Drive search. Tools that need an administrator (system, storage, accounts), Photos and Synology Office have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
+**Status: early (0.2.1).** A test on a real NAS with a non-administrator account confirmed the file tools, Drive search, and reading, exporting, importing and copying Synology Office files. Tools that need an administrator (system, storage, accounts), Photos and editing `.osheet` cells have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
 
 - **Only the tools that apply.** At startup the server reads the NAS's own API list (`SYNO.API.Info`, no login needed) and hides whatever isn't installed, so a package you don't have costs no context.
 - **2FA without repeated codes.** `setup` exchanges one code for a trusted-device token, stored in the Keychain.
@@ -114,7 +114,7 @@ Office files are addressed by Drive path (`/mydrive/Budget.osheet`), by `link_id
 
 **Through DSM, with nothing else to install.** The `office_*` tools read any spreadsheet, document or presentation as text or in full, create empty files, convert CSV and Microsoft or OpenDocument files into Office files, export to `xlsx`, `docx`, `pptx`, `ods`, `odt` and `odp`, and manage versions, attachments, templates, themes and settings.
 
-Synology doesn't document these `SYNO.Office.*` APIs. Their methods and parameters come from the web client that Synology Office 3.7.2 serves. `office_apis` lists them all with the tool that reaches each, and `office_call` calls any method without a dedicated tool. Of the 49 APIs on the NAS these were read from, Synology's client never calls 10, so their methods are unknown: `Doc.Snapshot`, `Group`, `Metrics`, `Notification`, `OFile`, `Permission`, `Permission.User`, `Presentation.Snapshot`, `Resource` and `Shard.JSConfig`.
+Synology doesn't document these `SYNO.Office.*` APIs. Their methods and parameters come from the web client that Synology Office 3.7.2 serves. `office_apis` lists them all with the tool that reaches each, and `office_call` calls any method without a dedicated tool. Of the 49 APIs on the NAS these were read from, Synology's client never calls 10, so their methods are unknown: `Doc.Snapshot`, `Group`, `Metrics`, `Notification`, `OFile`, `Permission`, `Permission.User`, `Presentation.Snapshot`, `Resource` and `Shard.JSConfig`. The client also names 3 APIs that NAS doesn't offer: `Doc.Outline`, `Cluster.Status` and `Sheet.Snapshot.Worksheet`. Only what a NAS lists can be called, so `office_sheet_copy` appears only where it's available.
 
 These APIs have limits:
 
@@ -125,14 +125,14 @@ These APIs have limits:
 **Through the official Spreadsheet API, to edit cells in place.** The `sheet_*` tools read and write ranges, append rows, format cells, and manage tabs, rows and columns in the live file. They need Synology's [`synology/spreadsheet-api`](https://hub.docker.com/r/synology/spreadsheet-api) container, which isn't part of the Office package:
 
 1. Deploy [docker-compose.spreadsheet.yml](docker-compose.spreadsheet.yml), with Portainer or `docker compose`. The image tag must match your Synology Office: 3.4.x for Office 3.7.0 or later, 3.3.x for Office 3.6.x. Synology advises against running it on the same DSM as Office when many spreadsheets are active, since each open spreadsheet gets its own worker.
-2. Run `synology-mcp spreadsheet-setup`. It tests a login through the container before storing anything.
-3. Restart your MCP client.
+2. Make it reachable securely. The container takes DSM passwords over plain HTTP, so its port is published on loopback only, and this server refuses to send a password to it over plain HTTP from another machine. Either add an HTTPS reverse proxy (Control Panel > Login Portal > Advanced > Reverse Proxy, destination `http://localhost:3000`), or open an SSH tunnel: `ssh -N -L 3000:127.0.0.1:3000 you@your-nas`.
+3. Run `synology-mcp spreadsheet-setup --url https://your-proxy:port`, or `--url http://127.0.0.1:3000` through the tunnel. It pins an HTTPS certificate and tests a login through the container before storing anything.
+4. Restart your MCP client.
 
-Three things to expect from this container:
+Two more things to expect from this container:
 
 - **2FA.** Its login accepts no 2FA code, as far as a third-party project reports, so a 2FA account needs a dedicated DSM account without 2FA.
-- **Certificates.** It can't verify DSM's self-signed certificate, so point it at DSM's `http` port.
-- **Plain HTTP.** It listens on plain HTTP by default, so the password and token aren't encrypted on the way to it unless you add a reverse proxy or use a VPN.
+- **Certificates.** It can't verify DSM's self-signed certificate, so point it at DSM's `http` port. That traffic stays private only if the container runs on the NAS itself.
 
 ## How 2FA works
 
@@ -193,9 +193,9 @@ The code is split into `src/dsm` (DSM client: session, TLS, errors), `src/mcp` (
 
 ### Verification status
 
-The tests cover the server's behavior against a simulated DSM. On a real NAS, with a non-administrator account, these have been confirmed: login, listing, searching, reading, downloading, writing, uploading, copying, renaming and deleting files, creating folders, and searching Drive. The shape of the other calls comes from the reference projects below, which tested them on DSM 7.x, but it still needs confirming:
+The tests cover the server's behavior against a simulated DSM. On a real NAS, with a non-administrator account, these have been confirmed: login, listing, searching, reading, downloading, writing, uploading, copying, renaming and deleting files, creating folders, searching Drive, and reading, exporting, importing and copying Synology Office files. The shape of the other calls comes from the reference projects below, which tested them on DSM 7.x, but it still needs confirming:
 
-- No `office_*` tool has run against a real NAS. Their calls come from Synology Office 3.7.2's web client, so a reply may differ from what the tool expects. `doctor` tries the read tools on the first `.osheet` it finds.
+- Renaming with `office_update` and `office_version_action` were corrected after that test and have not run on a real NAS since. Their calls come from Synology Office 3.7.2's web client. `doctor` tries the Office read tools on the first `.osheet` it finds.
 - No `sheet_*` tool has run against the real container. Synology's API reference is not public, so their calls follow [vocweb/synology-mcp-server](https://github.com/vocweb/synology-mcp-server), which is itself tested mostly against mocks.
 
 - Read tools can be confirmed with `doctor`, using an administrator account for system, storage and accounts. Some have no equivalent in the references, so watch those first: `security_login_activity`, `drive_labels`, and `photos_items` with no source given.

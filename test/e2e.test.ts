@@ -113,6 +113,16 @@ describe.skipIf(!existsSync(ENTRY))('the built program', () => {
     expect(result.stdout).not.toContain('device-token');
   });
 
+  it('will not set up the Spreadsheet API over plain HTTP to another machine', async () => {
+    await setUp();
+    const before = readFileSync(join(dir, 'synology-mcp/config.json'), 'utf8');
+    const result = await run(['spreadsheet-setup', '--url', 'http://192.0.2.1:3000', '--dsm-protocol', 'http', '--dsm-host', 'dsm:5003', '--username', 'bob', '--password-stdin'], env, 'hunter2\n');
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('plain HTTP');
+    expect(`${result.stdout}${result.stderr}`).not.toContain('hunter2');
+    expect(readFileSync(join(dir, 'synology-mcp/config.json'), 'utf8')).toBe(before);
+  });
+
   it('refuses to run with no NAS configured, saying what to do', async () => {
     const result = await run(['serve'], env);
     expect(result.code).toBe(1);

@@ -177,13 +177,9 @@ export class DsmClient {
     has(api) {
         return this.catalogCache ? this.catalogCache.has(api) : true;
     }
-    async entry(api, method, options = {}) {
+    async entry(api, method) {
         const catalog = await this.catalog();
         const entry = catalog.get(api);
-        if (!entry && options.unlisted) {
-            const version = options.version ?? 1;
-            return { path: 'entry.cgi', minVersion: 1, maxVersion: version, requestFormat: 'JSON' };
-        }
         if (!entry) {
             throw new DsmError(`${api} is not available on this NAS.`, {
                 kind: 'api_not_found',
@@ -354,7 +350,7 @@ export class DsmClient {
     // ---------------------------------------------------------------- calls
     /** Call a DSM API method and return its `data`. */
     async call(api, method, params = {}, options = {}) {
-        const entry = await this.entry(api, method, options);
+        const entry = await this.entry(api, method);
         const version = this.negotiate(entry, api, method, options);
         const write = options.write ?? !isReadMethod(method);
         await this.ensureSession();
@@ -509,7 +505,7 @@ export class DsmClient {
     // ---------------------------------------------------------------- binary and streams
     /** GET a binary reply. A JSON reply is DSM reporting an error instead of sending data. */
     async openBinary(api, method, params, options, retried = false) {
-        const entry = await this.entry(api, method, options);
+        const entry = await this.entry(api, method);
         const version = this.negotiate(entry, api, method, options);
         await this.ensureSession();
         const fields = new URLSearchParams({
@@ -596,7 +592,7 @@ export class DsmClient {
     }
     /** Multipart upload. The file part must come last, and `fields` go in the form as given. */
     async upload(api, method, version, fields, file, options = {}, retried = false) {
-        const entry = await this.entry(api, method, options);
+        const entry = await this.entry(api, method);
         const resolved = this.negotiate(entry, api, method, { ...options, version });
         await this.ensureSession();
         const form = new FormData();

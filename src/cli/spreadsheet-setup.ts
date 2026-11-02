@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { instanceKey, loadConfig, saveFileConfig } from '../config.js';
 import { CredentialProvider } from '../credentials.js';
-import { SpreadsheetClient } from '../dsm/spreadsheet.js';
+import { assertSafeSpreadsheetUrl, SpreadsheetClient } from '../dsm/spreadsheet.js';
 import { fetchPeerCertificate } from '../dsm/tls.js';
 import { askHidden, readAllStdin } from './setup.js';
 
@@ -40,9 +40,15 @@ export async function runSpreadsheetSetup(argv: string[]): Promise<void> {
 
   const nas = new URL(config.url);
   output.write('Spreadsheet API setup. The container must already be running: see docker-compose.spreadsheet.yml.\n\n');
-  const url = (values.url ?? (await ask('Container address', config.spreadsheetApiUrl ?? `http://${nas.hostname}:3000`))).replace(/\/+$/, '');
+  const url = (values.url ?? (await ask('Container address: https://..., or http://127.0.0.1:<port> through an SSH tunnel', config.spreadsheetApiUrl))).replace(/\/+$/, '');
   if (!url) throw new Error('The container address is needed.');
-  output.write('\nThe container logs in to DSM by itself. Its check of DSM\'s self-signed certificate fails, so it usually needs DSM\'s plain http port.\n');
+  try {
+    assertSafeSpreadsheetUrl(url);
+  } catch (error) {
+    const detail = error as Error & { hint?: string };
+    throw new Error(`${detail.message}\n${detail.hint}`);
+  }
+  output.write('\nThe container logs in to DSM by itself. Its check of DSM\'s self-signed certificate fails, so it usually needs DSM\'s http port. That stays private only if the container runs on the NAS itself.\n');
   const dsmProtocol = values['dsm-protocol'] ?? (await ask('Protocol the container uses to reach DSM (http or https)', config.spreadsheetDsmProtocol ?? 'http'));
   if (dsmProtocol !== 'http' && dsmProtocol !== 'https') throw new Error('The protocol must be http or https.');
   const dsmHost = values['dsm-host'] ?? (await ask('host:port the container uses to reach DSM', config.spreadsheetDsmHost ?? nas.host));
@@ -54,8 +60,6 @@ export async function runSpreadsheetSetup(argv: string[]): Promise<void> {
     output.write(`\nThe container presents this certificate:\n  subject:  ${cert.subject}\n  expires:  ${cert.validTo}\n  sha-256:  ${cert.fingerprint256}\n`);
     if (!(values['accept-cert'] || /^y/i.test(await ask('Pin it? (y/n)', 'y')))) throw new Error('Certificate not accepted, so nothing was changed.');
     certFingerprint = cert.fingerprint256;
-  } else {
-    output.write('\nThis address is plain http, so the password and token are not encrypted on the way to the container. Use it only on a network you trust, such as a VPN.\n');
   }
 
   output.write('\nThis API accepts no 2FA code. If your DSM account uses 2FA, give a dedicated account without it.\n');

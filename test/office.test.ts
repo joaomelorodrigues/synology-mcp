@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { SpreadsheetClient } from '../src/dsm/spreadsheet.js';
 import { officePath } from '../src/tools/office.js';
 import { expandRange } from '../src/tools/sheets.js';
 import { DsmFailure, FakeDsm } from './fake-dsm.js';
@@ -17,9 +18,13 @@ const TASKS = 'SYNO.SynologyDrive.Tasks';
 const SHEET = { object_id: 'obj1', link_id: 'LINK123', title: 'Budget.osheet', ntype: 'sheet' };
 const DOC = { object_id: 'obj2', link_id: 'DOC456', title: 'Notes.odoc', ntype: 'doc' };
 
+const VERSION_A = 'a'.repeat(40);
+const VERSION_B = 'b'.repeat(40);
+
 function office(): FakeDsm {
   return new FakeDsm()
     .on(NODE, 'get', (params) => (params.path?.includes('DOC456') ? DOC : SHEET))
+    .on(FILES, 'update', () => ({}))
     .on('SYNO.Office.Info', 'get', () => ({ version: '3.7.2' }))
     .on('SYNO.Office.Locale', 'list', () => ({ locales: ['pt_PT'] }))
     .on('SYNO.Office.File', 'extract', () => ({ data: '  hello world  ' }))
@@ -27,7 +32,13 @@ function office(): FakeDsm {
     .on('SYNO.Office.Snapshot', 'get', () => ({ object_id: 'obj2', content: { blocks: [] } }))
     .on('SYNO.Office.Sheet.Snapshot', 'get', () => ({ sheets: ['sh_1'] }))
     .on('SYNO.Office.Sheet.Snapshot.History', 'get', () => ({ sheets: ['old'] }))
-    .on('SYNO.Office.Node.Version', 'list', () => ({ total: 1, versions: [{ version: 7, ver_name: 'v1', mtime: 1_700_000_000, author: { name: 'bob' }, editors: [{ name: 'ana' }], last_version: true }] }))
+    .on('SYNO.Office.Node.Version', 'list', () => ({
+      total: 2,
+      versions: [
+        { version: VERSION_B, ver_name: 'v2', mtime: 1_700_000_100, author: { name: 'bob' }, editors: [{ name: 'ana' }], last_version: [VERSION_A] },
+        { version: VERSION_A, mtime: 1_700_000_000, author: { name: 'bob' }, last_version: [] },
+      ],
+    }))
     .on('SYNO.Office.Node.Version', 'restore', () => ({}))
     .on('SYNO.Office.Node.Version', 'rename', () => ({}))
     .on('SYNO.Office.Node.Attachment', 'create', () => ({ files: [{ file_id: 'f1' }] }))
@@ -108,16 +119,18 @@ describe('Office tools over DSM', () => {
 
   it('reads the full structure by the right API for each type and version', async () => {
     await expect(harness.call('office_snapshot', { file: 'LINK123' })).resolves.toEqual({ sheets: ['sh_1'] });
-    await expect(harness.call('office_snapshot', { file: 'LINK123', version: 3 })).resolves.toEqual({ sheets: ['old'] });
-    expect(fake.callsTo('SYNO.Office.Sheet.Snapshot.History', 'get')[0]!.params).toMatchObject({ object_id: '"obj1"', ver: '3' });
+    await expect(harness.call('office_snapshot', { file: 'LINK123', version: VERSION_A })).resolves.toEqual({ sheets: ['old'] });
+    expect(fake.callsTo('SYNO.Office.Sheet.Snapshot.History', 'get')[0]!.params).toMatchObject({ object_id: '"obj1"', ver: `"${VERSION_A}"` });
     await expect(harness.call('office_snapshot', { file: 'DOC456' })).resolves.toMatchObject({ content: { blocks: [] } });
     expect(fake.callsTo('SYNO.Office.Snapshot', 'get')[0]!.version).toBe(3);
-    expect((await harness.callRaw('office_snapshot', { file: 'DOC456', version: 1 })).isError).toBe(true);
+    expect((await harness.callRaw('office_snapshot', { file: 'DOC456', version: VERSION_A })).isError).toBe(true);
   });
 
-  it('lists versions in readable form', async () => {
+  it('lists versions, marking the newest as current and last_version as the one before', async () => {
     const result = await harness.call('office_versions', { file: 'LINK123' });
-    expect(result.versions[0]).toEqual({ version: 7, name: 'v1', author: 'bob', modified: '2023-11-14T22:13:20Z', editors: ['ana'], current: true });
+    expect(result.versions[0]).toEqual({ version: VERSION_B, name: 'v2', author: 'bob', modified: '2023-11-14T22:15:00Z', editors: ['ana'], current: true, previous: VERSION_A });
+    expect(result.versions[1].current).toBeUndefined();
+    expect(result.versions[1].previous).toBeUndefined();
     expect(JSON.parse(fake.callsTo('SYNO.Office.Node.Version', 'list')[0]!.params.additional!)).toMatchObject({ name: true });
   });
 
@@ -178,22 +191,97 @@ describe('Office tools over DSM', () => {
     });
   });
 
+  describe('renaming', () => {
+    /** A NAS on which the rename takes effect, or doesn't. */
+    function renameTakesEffect(applies: boolean): void {
+      let title = SHEET.title;
+      fake.on(FILES, 'update', (params) => {
+        if (applies) title = JSON.parse(params.name!);
+        return {};
+      });
+      fake.on(NODE, 'get', () => ({ ...SHEET, title }));
+    }
+
+    it('goes through Drive, keeps the extension and confirms by reading the file back', async () => {
+      renameTakesEffect(true);
+      const result = await harness.call('office_update', { file: 'LINK123', title: 'Renamed' });
+      expect(result).toMatchObject({ updated: 'Renamed.osheet', confirmed: true });
+      const call = fake.callsTo(FILES, 'update')[0]!;
+      expect(call.version).toBe(2);
+      expect(call.params).toMatchObject({ path: '"link:LINK123"', name: '"Renamed.osheet"' });
+      expect(fake.callsTo(NODE, 'set')).toHaveLength(0);
+    });
+
+    it('does not double an extension the caller already gave', async () => {
+      renameTakesEffect(true);
+      await harness.call('office_update', { file: 'LINK123', title: 'Renamed.osheet' });
+      expect(fake.callsTo(FILES, 'update')[0]!.params.name).toBe('"Renamed.osheet"');
+    });
+
+    it('finds the file by its link after renaming, since a path no longer points to it', async () => {
+      renameTakesEffect(true);
+      await harness.call('office_update', { file: '/mydrive/Budget.osheet', title: 'Renamed' });
+      expect(fake.callsTo(NODE, 'get').at(-1)!.params.path).toBe('"link:LINK123"');
+    });
+
+    it('never reports success when DSM accepted the rename but the name stayed', async () => {
+      renameTakesEffect(false);
+      const { isError, text } = await harness.callRaw('office_update', { file: 'LINK123', title: 'Renamed' });
+      expect(isError).toBe(true);
+      expect(text).toContain('Budget');
+      expect(JSON.parse(text).error.outcome_unknown).toBe(true);
+    });
+
+    it('refuses a name that is a path', async () => {
+      const { isError } = await harness.callRaw('office_update', { file: 'LINK123', title: 'a/b' });
+      expect(isError).toBe(true);
+      expect(fake.callsTo(FILES, 'update')).toHaveLength(0);
+    });
+  });
+
+  it('sets the locale by object id, as the client does', async () => {
+    fake.on(NODE, 'set', () => ({}));
+    await harness.call('office_update', { file: 'LINK123', locale: 'pt_PT' });
+    expect(fake.callsTo(NODE, 'set')[0]!.params).toMatchObject({ object_id: '"obj1"', locale: '"pt_PT"' });
+    expect((await harness.callRaw('office_update', { file: 'LINK123' })).isError).toBe(true);
+  });
+
   it('asks before setting a new password or restoring a version', async () => {
     fake.on(NODE, 'set', () => ({}));
-    await harness.call('office_update', { file: 'LINK123', title: 'Renamed' });
-    expect(fake.callsTo(NODE, 'set')).toHaveLength(1);
     const preview = await harness.call('office_update', { file: 'LINK123', new_password: 'x' });
     expect(preview.confirm_required).toBe(true);
-    expect(fake.callsTo(NODE, 'set')).toHaveLength(1);
-    expect((await harness.callRaw('office_update', { file: 'LINK123' })).isError).toBe(true);
+    expect(fake.callsTo(NODE, 'set')).toHaveLength(0);
 
-    const restore = await harness.call('office_version_action', { file: 'LINK123', version: 3, action: 'restore' });
+    const restore = await harness.call('office_version_action', { file: 'LINK123', version: VERSION_A, action: 'restore' });
     expect(restore.confirm_required).toBe(true);
     expect(fake.callsTo('SYNO.Office.Node.Version', 'restore')).toHaveLength(0);
-    await harness.call('office_version_action', { file: 'LINK123', version: 3, action: 'restore', confirm: true });
-    expect(fake.callsTo('SYNO.Office.Node.Version', 'restore')).toHaveLength(1);
-    await harness.call('office_version_action', { file: 'LINK123', version: 3, action: 'rename', name: 'Final' });
+    await harness.call('office_version_action', { file: 'LINK123', version: VERSION_A, action: 'restore', confirm: true });
+    expect(fake.callsTo('SYNO.Office.Node.Version', 'restore')[0]!.params.ver).toBe(`"${VERSION_A}"`);
+    await harness.call('office_version_action', { file: 'LINK123', version: VERSION_A, action: 'rename', name: 'Final' });
     expect(fake.callsTo('SYNO.Office.Node.Version', 'rename')[0]!.params.ver_name).toBe('"Final"');
+  });
+
+  it.each([
+    ['office_file', {}],
+    ['office_snapshot', {}],
+    ['office_copy', {}],
+    ['office_version_action', { action: 'rename', name: 'x' }],
+  ])('%s takes a version as the 40-character hash DSM uses', async (name, extra) => {
+    fake.on(NODE, 'copy', () => ({}));
+    const { text } = await harness.callRaw(name, { file: 'LINK123', version: VERSION_A, ...extra });
+    expect(text).not.toContain('Invalid');
+    expect(text).not.toContain('expected number');
+  });
+
+  it('explains a Drive folder that does not exist yet', async () => {
+    fake.on(NODE, 'copy', () => {
+      throw new DsmFailure(1003);
+    });
+    const { isError, text } = await harness.callRaw('office_copy', { file: 'LINK123', to_folder: '/mydrive/new' });
+    expect(isError).toBe(true);
+    const { error } = JSON.parse(text);
+    expect(error).toMatchObject({ kind: 'not_found', code: 1003, retryable: true });
+    expect(error.hint).toContain('drive_list');
   });
 
   it('refuses settings Synology does not have, and sends the ones it does', async () => {
@@ -217,23 +305,24 @@ describe('Office tools over DSM', () => {
     expect(fake.callsTo('SYNO.Office.Template', 'delete')[0]!.params.object_id).toBe('"t1"');
   });
 
-  describe('APIs that DSM does not list', () => {
-    it('reaches them through entry.cgi, since the client uses them', async () => {
+  describe('APIs the client names but a NAS may not offer', () => {
+    it('hides the tool that depends on one, and offers it where the API exists', async () => {
+      expect(await harness.toolNames()).not.toContain('office_sheet_copy');
       fake.on('SYNO.Office.Sheet.Snapshot.Worksheet', 'copy_new', () => ({ object_id: 'o3', link_id: 'COPY3', title: 'Tab' }));
-      fake.on('SYNO.Office.Doc.Outline', 'get', () => ({ outline: [] }));
-      delete fake.catalog['SYNO.Office.Sheet.Snapshot.Worksheet'];
-      delete fake.catalog['SYNO.Office.Doc.Outline'];
-      await harness.client.catalog({ refresh: true });
-      const copied = await harness.call('office_sheet_copy', { file: 'LINK123', sheet_id: 'sh_2', title: 'Tab' });
+      const offered = await connect(fake);
+      const copied = await offered.call('office_sheet_copy', { file: 'LINK123', sheet_id: 'sh_2', title: 'Tab' });
       expect(copied.link_id).toBe('COPY3');
       expect(fake.callsTo('SYNO.Office.Sheet.Snapshot.Worksheet', 'copy_new')[0]!.params).toMatchObject({ sheet_id: '"sh_2"', path: '"/mydrive"' });
-      await expect(harness.call('office_lookup', { kind: 'doc_outline', file: 'DOC456' })).resolves.toEqual({ outline: [] });
+      await offered.close();
     });
 
-    it('still says when one is really absent', async () => {
+    it('says so plainly for the rest, without calling DSM', async () => {
       const { isError, text } = await harness.callRaw('office_lookup', { kind: 'doc_outline', file: 'DOC456' });
       expect(isError).toBe(true);
-      expect(JSON.parse(text).error.code).toBe(103);
+      expect(JSON.parse(text).error).toMatchObject({ kind: 'not_supported' });
+      expect(fake.callsTo('SYNO.Office.Doc.Outline')).toHaveLength(0);
+      const called = await harness.callRaw('office_call', { api: 'SYNO.Office.Doc.Outline', method: 'get' });
+      expect(JSON.parse(called.text).error).toMatchObject({ kind: 'api_not_found' });
     });
   });
 
@@ -265,7 +354,8 @@ describe('Office tools over DSM', () => {
     expect(find('SYNO.Office.Node').methods).toContain('create(path,title,ntype');
     expect(find('SYNO.Office.Node').versions).toBe('1-9');
     expect(find('SYNO.Office.Metrics').methods).toContain('unknown');
-    expect(find('SYNO.Office.Doc.Outline').not_listed_by_dsm).toBe(true);
+    expect(find('SYNO.Office.Doc.Outline').not_on_this_nas).toBe(true);
+    expect(find('SYNO.Office.Node').not_on_this_nas).toBeUndefined();
   });
 });
 
@@ -424,6 +514,35 @@ describe('the Spreadsheet API container', () => {
   });
 
   const sent = (fragment: string): SpreadsheetRequest | undefined => requests.find((r) => r.url.includes(fragment));
+
+  describe('where the password may go', () => {
+    const attempt = async (address: string): Promise<{ error?: { kind?: string; hint?: string }; loginRead: boolean }> => {
+      let loginRead = false;
+      const client = new SpreadsheetClient({ url: address, dsmHost: 'dsm:5003', dsmProtocol: 'http', timeoutMs: 500 }, async () => {
+        loginRead = true;
+        return { username: 'alice', password: 'secret' };
+      });
+      const error = await client.authorize().then(
+        () => undefined,
+        (e) => e as { kind?: string; hint?: string },
+      );
+      await client.close();
+      return { error, loginRead };
+    };
+
+    it.each(['http://10.8.0.1:3000', 'http://nas.local:3000', 'http://192.0.2.1:3000'])('refuses plain HTTP to %s before even reading the password', async (address) => {
+      const { error, loginRead } = await attempt(address);
+      expect(error?.kind).toBe('refused');
+      expect(error?.hint).toContain('HTTPS');
+      expect(loginRead).toBe(false);
+    });
+
+    it.each(['http://127.0.0.1:1', 'http://localhost:1', 'http://[::1]:1', 'https://192.0.2.1:1'])('allows %s, which is local or encrypted', async (address) => {
+      const { error, loginRead } = await attempt(address);
+      expect(error?.kind).not.toBe('refused');
+      expect(loginRead).toBe(true);
+    });
+  });
 
   it('stays hidden until it is set up, and says how', async () => {
     const plain = await connect(fake);

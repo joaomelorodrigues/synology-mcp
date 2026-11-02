@@ -62,8 +62,6 @@ export interface CallOptions {
   write?: boolean;
   /** JSON-quote all string parameters, as DSM's own web client does. */
   quoteStrings?: boolean;
-  /** The API works although SYNO.API.Info doesn't list it: assume entry.cgi and `version`. */
-  unlisted?: boolean;
   /** For binary replies: send parameters in a POST body, not the URL, e.g. a document password. */
   post?: boolean;
 }
@@ -220,13 +218,9 @@ export class DsmClient {
     return this.catalogCache ? this.catalogCache.has(api) : true;
   }
 
-  private async entry(api: string, method: string, options: CallOptions = {}): Promise<ApiEntry> {
+  private async entry(api: string, method: string): Promise<ApiEntry> {
     const catalog = await this.catalog();
     const entry = catalog.get(api);
-    if (!entry && options.unlisted) {
-      const version = options.version ?? 1;
-      return { path: 'entry.cgi', minVersion: 1, maxVersion: version, requestFormat: 'JSON' };
-    }
     if (!entry) {
       throw new DsmError(`${api} is not available on this NAS.`, {
         kind: 'api_not_found',
@@ -401,7 +395,7 @@ export class DsmClient {
 
   /** Call a DSM API method and return its `data`. */
   async call<T = any>(api: string, method: string, params: Params = {}, options: CallOptions = {}): Promise<T> {
-    const entry = await this.entry(api, method, options);
+    const entry = await this.entry(api, method);
     const version = this.negotiate(entry, api, method, options);
     const write = options.write ?? !isReadMethod(method);
     await this.ensureSession();
@@ -574,7 +568,7 @@ export class DsmClient {
     options: CallOptions,
     retried = false,
   ): Promise<Response> {
-    const entry = await this.entry(api, method, options);
+    const entry = await this.entry(api, method);
     const version = this.negotiate(entry, api, method, options);
     await this.ensureSession();
     const fields = new URLSearchParams({
@@ -682,7 +676,7 @@ export class DsmClient {
     options: CallOptions = {},
     retried = false,
   ): Promise<T> {
-    const entry = await this.entry(api, method, options);
+    const entry = await this.entry(api, method);
     const resolved = this.negotiate(entry, api, method, { ...options, version });
     await this.ensureSession();
     const form = new FormData();

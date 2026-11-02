@@ -185,8 +185,22 @@ const FOTO = {
     801: { kind: 'permission_denied', message: 'Personal space is unavailable: enable the user home service in Control Panel > User & Group > Advanced' },
     803: { kind: 'permission_denied', message: 'No permission for this Shared Space folder' },
 };
-/** Synology Office codes, as its own web client handles them. */
+/** Synology Office and Drive codes, as their own web clients handle them. */
 const OFFICE = {
+    1002: { kind: 'permission_denied', message: 'This account has no permission on this file or folder' },
+    1003: {
+        kind: 'not_found',
+        message: 'The file or folder does not exist in Drive, or Drive has not indexed it yet',
+        hint: 'A folder created moments ago outside Drive takes a while to appear. Check with drive_list, then retry.',
+        retryable: true,
+    },
+    1036: {
+        kind: 'not_found',
+        message: 'The file or folder does not exist in Drive, or Drive has not indexed it yet',
+        hint: 'A folder created moments ago outside Drive takes a while to appear. Check with drive_list, then retry.',
+        retryable: true,
+    },
+    1038: { kind: 'not_found', message: 'This link has expired' },
     57373: { kind: 'permission_denied', message: 'This document is encrypted and needs its password', hint: 'Pass password.' },
     57383: { kind: 'permission_denied', message: 'This account cannot read this document' },
     57402: { kind: 'already_exists', message: 'A version with this name already exists', hint: 'Pass overwrite=true to reuse the name.' },

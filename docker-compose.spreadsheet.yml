@@ -4,6 +4,11 @@
 # variables, for example to the output of: openssl rand -hex 32
 # Without it: AUTH_SECRET=$(openssl rand -hex 32) docker compose -f docker-compose.spreadsheet.yml up -d
 #
+# The port is published on loopback only, because the API takes DSM passwords over plain HTTP. To
+# reach it from another machine, either put an HTTPS reverse proxy in front (DSM: Control Panel >
+# Login Portal > Advanced > Reverse Proxy, destination http://localhost:3000), or use an SSH tunnel:
+#   ssh -N -L 3000:127.0.0.1:3000 you@your-nas
+#
 # Then run: synology-mcp spreadsheet-setup
 #
 # The tag must match your Synology Office: 3.4.x for Office 3.7.0 or later, 3.3.x for Office 3.6.x.
@@ -14,6 +19,6 @@ services:
     image: synology/spreadsheet-api:3.4.1
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET to a long random value}
