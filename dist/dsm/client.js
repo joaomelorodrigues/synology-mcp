@@ -268,7 +268,7 @@ export class DsmClient {
         }
         else if (code === 403 || code === 404 || code === 406) {
             hint = credentials.deviceId
-                ? 'DSM no longer accepts the stored trusted-device token (it may have been removed in Personal > Security > Signed-in devices). Call nas_auth_otp with a fresh 2FA code, or run `synology-mcp setup`.'
+                ? 'DSM no longer accepts the stored trusted-device token (it may have been removed in Personal > Security > Sign-in Activity). Call nas_auth_otp with a fresh 2FA code, or run `synology-mcp setup`.'
                 : 'This account uses 2FA and no trusted-device token is stored. Call nas_auth_otp with a current 2FA code, or run `synology-mcp setup`.';
         }
         else if (code === 407) {
