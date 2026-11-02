@@ -119,6 +119,8 @@ describe.skipIf(!existsSync(ENTRY))('the built program', () => {
     const result = await run(['spreadsheet-setup', '--url', 'http://192.0.2.1:3000', '--dsm-protocol', 'http', '--dsm-host', 'dsm:5003', '--username', 'bob', '--password-stdin'], env, 'hunter2\n');
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('plain HTTP');
+    expect(result.stderr).toContain('SSH tunnel');
+    expect(result.stderr).not.toContain('    at ');
     expect(`${result.stdout}${result.stderr}`).not.toContain('hunter2');
     expect(readFileSync(join(dir, 'synology-mcp/config.json'), 'utf8')).toBe(before);
   });
@@ -127,5 +129,6 @@ describe.skipIf(!existsSync(ENTRY))('the built program', () => {
     const result = await run(['serve'], env);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('synology-mcp setup');
+    expect(result.stderr).not.toContain('    at ');
   });
 });

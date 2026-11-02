@@ -42,13 +42,7 @@ export async function runSpreadsheetSetup(argv) {
     const url = (values.url ?? (await ask('Container address: https://..., or http://127.0.0.1:<port> through an SSH tunnel', config.spreadsheetApiUrl))).replace(/\/+$/, '');
     if (!url)
         throw new Error('The container address is needed.');
-    try {
-        assertSafeSpreadsheetUrl(url);
-    }
-    catch (error) {
-        const detail = error;
-        throw new Error(`${detail.message}\n${detail.hint}`);
-    }
+    assertSafeSpreadsheetUrl(url);
     output.write('\nThe container logs in to DSM by itself. Its check of DSM\'s self-signed certificate fails, so it usually needs DSM\'s http port. That stays private only if the container runs on the NAS itself.\n');
     const dsmProtocol = values['dsm-protocol'] ?? (await ask('Protocol the container uses to reach DSM (http or https)', config.spreadsheetDsmProtocol ?? 'http'));
     if (dsmProtocol !== 'http' && dsmProtocol !== 'https')
@@ -76,10 +70,6 @@ export async function runSpreadsheetSetup(argv) {
     const client = new SpreadsheetClient({ url, dsmHost, dsmProtocol, certFingerprint, timeoutMs: 30_000 }, async () => (username && password ? { username, password } : credentials.resolveSpreadsheet()));
     try {
         await client.authorize();
-    }
-    catch (error) {
-        const detail = error;
-        throw new Error(`${detail.message}${detail.hint ? `\n${detail.hint}` : ''}`);
     }
     finally {
         await client.close();

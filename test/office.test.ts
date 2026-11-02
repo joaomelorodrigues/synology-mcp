@@ -530,7 +530,7 @@ describe('the Spreadsheet API container', () => {
       return { error, loginRead };
     };
 
-    it.each(['http://10.8.0.1:3000', 'http://nas.local:3000', 'http://192.0.2.1:3000'])('refuses plain HTTP to %s before even reading the password', async (address) => {
+    it.each(['http://10.0.0.5:3000', 'http://nas.local:3000', 'http://192.0.2.1:3000'])('refuses plain HTTP to %s before even reading the password', async (address) => {
       const { error, loginRead } = await attempt(address);
       expect(error?.kind).toBe('refused');
       expect(error?.hint).toContain('HTTPS');

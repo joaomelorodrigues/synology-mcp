@@ -6,7 +6,7 @@ import { runDoctor } from './cli/doctor.js';
 import { runSetup, runTrustCert } from './cli/setup.js';
 import { runSpreadsheetSetup } from './cli/spreadsheet-setup.js';
 import { runToolsReport } from './cli/tools.js';
-import { ConfigError, loadConfig } from './config.js';
+import { loadConfig } from './config.js';
 import { serveHttp } from './mcp/http.js';
 import { buildServer, chooseTools } from './mcp/server.js';
 import { createRuntime } from './runtime.js';
@@ -107,7 +107,8 @@ async function main() {
     }
 }
 main().catch((error) => {
-    const message = error instanceof ConfigError ? error.message : (error.stack ?? String(error));
-    process.stderr.write(`synology-mcp: ${message}\n`);
+    const { message, stack, hint } = error;
+    const detail = process.env.SYNOLOGY_DEBUG ? (stack ?? message) : (message ?? String(error));
+    process.stderr.write(`synology-mcp: ${detail}${hint ? `\n${hint}` : ''}\n`);
     process.exit(1);
 });
