@@ -2,7 +2,7 @@
 
 MCP server for managing a Synology NAS (DSM 7) from Claude or any other MCP client: system health, disks, files, Container Manager, accounts, security, Photos, Drive, Synology Office and any other DSM API your NAS offers.
 
-**Status: early (0.3.3).** Tests on a real NAS with a non-administrator account confirmed the file tools, most Drive tools including uploads and ZIP downloads, and reading, exporting, importing, copying and renaming Synology Office files. Tools that need an administrator (system, storage, accounts), Photos, MailPlus, Calendar and editing `.osheet` cells have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
+**Status: early (0.3.4).** Tests on a real NAS with a non-administrator account confirmed the file tools, most Drive tools including uploads and ZIP downloads, and reading, exporting, importing, copying and renaming Synology Office files. Tools that need an administrator (system, storage, accounts), Photos, MailPlus, Calendar and editing `.osheet` cells have not been confirmed on a real NAS yet. See [Verification status](#verification-status).
 
 - **Only the tools that apply.** At startup the server reads the NAS's own API list (`SYNO.API.Info`, no login needed) and hides whatever isn't installed, so a package you don't have costs no context.
 - **2FA without repeated codes.** `setup` exchanges one code for a trusted-device token, stored in the Keychain.
@@ -100,7 +100,7 @@ The server reads its settings at startup, so restart your MCP client after chang
 | Services and security | `services_status`, `security_overview`, `security_certificates`, `security_login_activity` | `service_set` |
 | Network | `network_services`, `reverse_proxy_list` | `reverse_proxy_create`, `reverse_proxy_delete` |
 | Tasks and backups | `scheduler_tasks`, `backup_tasks` | `scheduler_run`, `backup_run` |
-| Photos and Drive | `photos_collections`, `photos_items`, `photos_search`, `photos_download`, `drive_status`, `drive_list`, `drive_search`, `drive_labels`, `drive_file`, `drive_browse`, `drive_team`, `drive_download` | `photos_album_create`, `photos_album_add`, `drive_mkdir`, `drive_edit`, `drive_copy`, `drive_move`, `drive_delete`, `drive_upload`, `drive_share`, `drive_requests`, `drive_label`, `drive_admin` |
+| Photos and Drive | `photos_collections`, `photos_items`, `photos_search`, `photos_info`, `photos_thumbnail` (returns the picture for the model to look at), `photos_download`, `drive_status`, `drive_list`, `drive_search`, `drive_labels`, `drive_file`, `drive_browse`, `drive_team`, `drive_download` | `photos_album_create`, `photos_album_add`, `drive_mkdir`, `drive_edit`, `drive_copy`, `drive_move`, `drive_delete`, `drive_upload`, `drive_share`, `drive_requests`, `drive_label`, `drive_admin` |
 | Synology Office | `office_status`, `office_apis`, `office_file`, `office_read_text`, `office_snapshot`, `office_versions`, `office_attachments`, `office_templates`, `office_lookup`, `office_export`, `office_media_download` | `office_create`, `office_import`, `office_copy`, `office_update`, `office_version_action`, `office_attachment_add`, `office_template_action`, `office_theme_apply`, `office_settings_set`, `office_sheet_copy`, `office_call` |
 | Spreadsheet API container | `sheet_info`, `sheet_read`, `sheet_styles`, `sheet_export` | `sheet_write`, `sheet_append`, `sheet_format`, `sheet_tabs`, `sheet_dimensions`, `sheet_create`, `sheet_delete` |
 | MailPlus | `mail_mailboxes`, `mail_labels`, `mail_filters` | `mail_mailbox`, `mail_send`, `mail_label`, `mail_filter` |
@@ -215,12 +215,13 @@ The tests cover the server's behavior against a simulated DSM. On a real NAS, wi
 - The `mail_*` and `calendar_*` tools follow those published APIs. They have not run on a real NAS, because the one tested has neither package.
 - Other calls come from the reference projects below, which tested them on DSM 7.x, or from Synology Office 3.7.2's web client. `doctor` tries the Office read tools on the first `.osheet` it finds.
 - Read tools can be confirmed with `doctor`, using an administrator account for system, storage and accounts. Some have no equivalent in the references, so watch those first: `security_login_activity`, `drive_labels`, and `photos_items` with no source given.
+- No `photos_*` tool has run on a real NAS yet. `doctor` tries `photos_info` and `photos_thumbnail` on the most recent photo.
 - The 2FA flow can be confirmed by running `setup` on an account that uses it.
 - Write tools can only be confirmed by using them. Try them on unimportant data first, especially `files_compress`, which also has no equivalent in the references.
 
 ### References
 
-The DSM API conventions were learned from these projects: [cmeans/mcp-synology](https://github.com/cmeans/mcp-synology), [rafalr100/synology-mcp](https://github.com/rafalr100/synology-mcp), [atom2ueki/mcp-server-synology](https://github.com/atom2ueki/mcp-server-synology) and [vocweb/synology-mcp-server](https://github.com/vocweb/synology-mcp-server). The code here is original.
+The DSM API conventions were learned from these projects: [cmeans/mcp-synology](https://github.com/cmeans/mcp-synology), [rafalr100/synology-mcp](https://github.com/rafalr100/synology-mcp), [atom2ueki/mcp-server-synology](https://github.com/atom2ueki/mcp-server-synology) and [vocweb/synology-mcp-server](https://github.com/vocweb/synology-mcp-server). Filtering photos by date and rating, their details and thumbnails follow the notes in [zeichensatz/SynologyPhotosAPI](https://github.com/zeichensatz/SynologyPhotosAPI). The code here is original.
 
 ## License
 

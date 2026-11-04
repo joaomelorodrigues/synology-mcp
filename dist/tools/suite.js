@@ -14,7 +14,7 @@ import { asList, bytes, isoTime, redactSecrets } from '../mcp/format.js';
 import { assertNotProtected, assertRemovable, resolveLocalPath } from '../mcp/paths.js';
 import { confirmationNeeded, tool } from '../mcp/registry.js';
 import { SUITE_OPS, suiteOp } from '../suite/catalog.js';
-import { driveFileView, drivePath } from './apps.js';
+import { driveFileView, drivePath, epoch } from './apps.js';
 const FILES = 'SYNO.SynologyDrive.Files';
 const FILES_V = 11;
 /** The version Drive's own web client uses for uploads and ZIP downloads. */
@@ -31,15 +31,6 @@ function syno(client, api, method, version, params, options = {}) {
 function need(value, name, action) {
     if (value === undefined || value === '')
         throw new DsmError(`action=${action} needs ${name}.`, { kind: 'invalid_parameter' });
-}
-/** Epoch seconds. Numbers above 1e12 are treated as milliseconds. */
-function epoch(value) {
-    if (typeof value === 'number')
-        return value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
-    const parsed = Date.parse(value);
-    if (Number.isNaN(parsed))
-        throw new DsmError(`"${value}" is not a time. Use an ISO date such as 2026-11-02T09:00:00Z.`, { kind: 'invalid_parameter' });
-    return Math.floor(parsed / 1000);
 }
 /** Refuse a whole Drive root. id: and link: references are left to DSM. */
 function guardItem(path, protectedPaths) {

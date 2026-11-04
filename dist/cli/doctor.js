@@ -98,6 +98,12 @@ export async function runDoctor(argv) {
     samples.docker_registry_search = { query: 'nginx', limit: 1 };
     samples.photos_collections = { kind: 'albums', limit: 3 };
     samples.photos_search = { keyword: 'a', limit: 1 };
+    const recent = await client.tryCall('SYNO.Foto.Browse.RecentlyAdded', 'list', { offset: 0, limit: 1 }, { version: 1, quoteStrings: true });
+    const photo = recent.ok ? recent.data.list?.[0]?.id : undefined;
+    if (photo !== undefined) {
+        samples.photos_info = { id: photo };
+        samples.photos_thumbnail = { id: photo, size: 'sm' };
+    }
     samples.drive_search = { keyword: 'a', limit: 1 };
     samples.drive_list = { limit: 3 };
     samples.storage_volume_usage = { volume: '/volume1' };

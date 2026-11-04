@@ -1,6 +1,6 @@
 {
   "name": "synology-mcp",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "MCP server for Synology DSM 7: system, storage, files, Container Manager, accounts, security, Photos, Drive and any other DSM API.",
   "private": true,
   "type": "module",

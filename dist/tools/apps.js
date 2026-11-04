@@ -6,7 +6,7 @@ import { q } from '../dsm/client.js';
 import { DsmError } from '../dsm/errors.js';
 import { asList, bytes, isoTime, percent } from '../mcp/format.js';
 import { normalizeDrivePath, resolveLocalPath } from '../mcp/paths.js';
-import { confirmationNeeded, tool } from '../mcp/registry.js';
+import { confirmationNeeded, ImageReply, tool } from '../mcp/registry.js';
 // ------------------------------------------------------------------ Photos
 const space = z
     .enum(['personal', 'shared'])
@@ -34,6 +34,58 @@ const paging = {
     offset: z.number().int().min(0).default(0),
     limit: z.number().int().min(1).max(500).default(50),
 };
+/** Epoch seconds. Numbers above 1e12 are treated as milliseconds. */
+export function epoch(value) {
+    if (typeof value === 'number')
+        return value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed))
+        throw new DsmError(`"${value}" is not a time. Use an ISO date such as 2026-11-02T09:00:00Z.`, { kind: 'invalid_parameter' });
+    return Math.floor(parsed / 1000);
+}
+const when = z.union([z.string(), z.number()]);
+const THUMB_SIZES = ['sm', 'm', 'xl'];
+const MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024;
+const DETAILS = ['resolution', 'orientation', 'exif', 'gps', 'address', 'tag', 'person', 'description', 'thumbnail'];
+/** One item by id. IDs belong to one space, so a miss there usually means the other one. */
+async function fotoItem(client, s, id, additional, signal) {
+    const info = await foto(client, s, 'Browse.Item', 'get', { id: [id], additional }, { version: 2, signal });
+    const item = asList(info.list)[0];
+    if (!item)
+        throw new DsmError(`No item ${id} in the ${s} space.`, { kind: 'not_found', hint: 'IDs belong to one space.' });
+    return item;
+}
+function detailView(item) {
+    const extra = item.additional ?? {};
+    const exif = extra.exif ?? {};
+    const address = extra.address ?? {};
+    const place = [...new Set(['landmark', 'route', 'village', 'town', 'district', 'city', 'state', 'country'].map((key) => address[key]).filter(Boolean))];
+    const thumbnails = extra.thumbnail ?? {};
+    return {
+        ...itemView(item),
+        description: extra.description,
+        camera: exif.camera,
+        lens: exif.lens,
+        aperture: exif.aperture,
+        exposure: exif.exposure_time,
+        focal_length: exif.focal_length,
+        iso: exif.iso,
+        gps: extra.gps ? { latitude: extra.gps.latitude, longitude: extra.gps.longitude } : undefined,
+        place: place.join(', ') || undefined,
+        tags: asList(extra.tag).map((tag) => tag.name),
+        people: asList(extra.person).map((person) => person.name || `person ${person.id}`),
+        thumbnails: THUMB_SIZES.filter((size) => thumbnails[size] === 'ready'),
+    };
+}
+function imageType(data) {
+    if (data[0] === 0xff && data[1] === 0xd8)
+        return 'image/jpeg';
+    if (data.subarray(0, 4).toString('latin1') === '\x89PNG')
+        return 'image/png';
+    if (data.subarray(0, 4).toString('latin1') === 'RIFF' && data.subarray(8, 12).toString('latin1') === 'WEBP')
+        return 'image/webp';
+    return undefined;
+}
 export const photoTools = [
     tool({
         name: 'photos_collections',
@@ -80,7 +132,7 @@ export const photoTools = [
     tool({
         name: 'photos_items',
         title: 'List photos',
-        description: 'Photos and videos in an album, folder, person or tag, or recent ones when no source is given. Sorted by date taken, newest first.',
+        description: 'Photos and videos in an album, folder, person or tag, or recent ones when no source is given. Sorted by date taken, newest first. taken_from, taken_to and rating filter the whole library, alone or with person_id or tag_id.',
         module: 'photos',
         tier: 'read',
         requires: ['SYNO.Foto.Browse.Item'],
@@ -90,10 +142,23 @@ export const photoTools = [
             folder_id: z.number().int().optional(),
             person_id: z.number().int().optional(),
             tag_id: z.number().int().optional(),
+            taken_from: when.optional().describe('ISO date or time, such as 2023-06-01'),
+            taken_to: when.optional().describe('ISO date or time; a date alone means its first second, so use 2023-06-30T23:59:59Z for the whole day'),
+            rating: z.array(z.number().int().min(0).max(5)).min(1).optional().describe('Only these star ratings, such as [4, 5]'),
             ...paging,
         },
-        handler: async ({ space: s, album_id, folder_id, person_id, tag_id, offset, limit }, { client, signal }) => {
+        handler: async ({ space: s, album_id, folder_id, person_id, tag_id, taken_from, taken_to, rating, offset, limit }, { client, signal }) => {
             const page = { offset, limit, sort_by: 'takentime', sort_direction: 'desc', additional: ['resolution'] };
+            const dated = taken_from !== undefined || taken_to !== undefined;
+            if ((dated || rating) && (album_id !== undefined || folder_id !== undefined)) {
+                throw new DsmError('taken_from, taken_to and rating cannot narrow album_id or folder_id.', {
+                    kind: 'invalid_parameter',
+                    hint: 'Leave album_id and folder_id out to filter the whole library, alone or with person_id or tag_id.',
+                });
+            }
+            const time = dated
+                ? [{ start_time: taken_from === undefined ? 0 : epoch(taken_from), end_time: taken_to === undefined ? Math.floor(Date.now() / 1000) + 86_400 : epoch(taken_to) }]
+                : undefined;
             let data;
             if (album_id !== undefined) {
                 data = await foto(client, s, 'Browse.Item', 'list', { album_id, ...page }, { version: 2, signal });
@@ -101,10 +166,12 @@ export const photoTools = [
             else if (folder_id !== undefined) {
                 data = await foto(client, s, 'Browse.Item', 'list', { folder_id, ...page }, { version: 2, signal });
             }
-            else if (person_id !== undefined || tag_id !== undefined) {
+            else if (person_id !== undefined || tag_id !== undefined || time || rating) {
                 data = await foto(client, s, 'Browse.Item', 'list_with_filter', {
                     ...(person_id !== undefined ? { person: [person_id], person_policy: 'or' } : {}),
                     ...(tag_id !== undefined ? { general_tag: [tag_id], general_tag_policy: 'or' } : {}),
+                    ...(time ? { time } : {}),
+                    ...(rating ? { rating } : {}),
                     ...page,
                 }, { version: 2, signal });
             }
@@ -145,15 +212,53 @@ export const photoTools = [
             const folder = resolveLocalPath(local_folder, config.localRoots, { mustExist: true });
             if (!statSync(folder).isDirectory())
                 throw new DsmError(`${folder} is not a folder.`, { kind: 'invalid_parameter' });
-            const info = await foto(client, s, 'Browse.Item', 'get', { id: [id], additional: [] }, { version: 2, signal });
-            const item = asList(info.list)[0];
-            if (!item)
-                throw new DsmError(`No item ${id} in the ${s} space.`, { kind: 'not_found', hint: 'IDs belong to one space.' });
+            const item = await fotoItem(client, s, id, [], signal);
             const destination = resolveLocalPath(join(folder, item.filename), config.localRoots, { mustExist: false });
             if (existsSync(destination) && !overwrite)
                 throw new DsmError(`Local file already exists: ${destination}`, { kind: 'already_exists', hint: 'Pass overwrite=true.' });
             const written = await client.downloadToFile(fotoApi(s, 'Download'), 'download', { item_id: [id], force_download: true }, destination, { version: 1, signal, timeoutMs: 1_800_000 });
             return { id, saved_to: destination, size: bytes(written) };
+        },
+    }),
+    tool({
+        name: 'photos_info',
+        title: 'Photo details',
+        description: 'Details of one photo or video: when and where it was taken (GPS and place), camera and exposure, description, people, tags, and which thumbnail sizes exist.',
+        module: 'photos',
+        tier: 'read',
+        requires: ['SYNO.Foto.Browse.Item'],
+        input: { id: z.number().int(), space },
+        handler: async ({ id, space: s }, { client, signal }) => detailView(await fotoItem(client, s, id, DETAILS, signal)),
+    }),
+    tool({
+        name: 'photos_thumbnail',
+        title: 'Look at a photo',
+        description: 'Show a photo or video as a picture the model can see, from the thumbnails Photos keeps: sm (small), m (medium) or xl (about 1280 px, for detail). For the original file, use photos_download.',
+        module: 'photos',
+        tier: 'read',
+        requires: ['SYNO.Foto.Thumbnail', 'SYNO.Foto.Browse.Item'],
+        input: { id: z.number().int(), space, size: z.enum(THUMB_SIZES).default('m') },
+        handler: async ({ id, space: s, size }, { client, signal }) => {
+            const item = await fotoItem(client, s, id, ['thumbnail'], signal);
+            const thumbnails = item.additional?.thumbnail ?? {};
+            if (thumbnails[size] !== 'ready') {
+                const ready = THUMB_SIZES.filter((candidate) => thumbnails[candidate] === 'ready');
+                throw new DsmError(`Photos has no ${size} thumbnail of item ${id}.`, {
+                    kind: 'not_found',
+                    hint: ready.length ? `Sizes ready: ${ready.join(', ')}.` : 'Photos has not made its thumbnails yet. It may still be indexing.',
+                });
+            }
+            const { data, truncated } = await client.readBinary(fotoApi(s, 'Thumbnail'), 'get', { id, cache_key: thumbnails.cache_key, type: 'unit', size }, MAX_THUMBNAIL_BYTES, {
+                version: 1,
+                quoteStrings: true,
+                signal,
+            });
+            if (truncated)
+                throw new DsmError(`The thumbnail is larger than ${bytes(MAX_THUMBNAIL_BYTES)}.`, { kind: 'bad_reply', hint: 'Ask for a smaller size.' });
+            const mimeType = imageType(data);
+            if (!mimeType)
+                throw new DsmError(`Photos answered with something that is not an image for item ${id}.`, { kind: 'bad_reply', api: fotoApi(s, 'Thumbnail'), method: 'get' });
+            return new ImageReply(data, mimeType, { id, filename: item.filename, taken: isoTime(item.time), size, bytes: bytes(data.length) });
         },
     }),
     tool({

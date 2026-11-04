@@ -7,6 +7,17 @@
 import { TIERS } from '../config.js';
 import { DsmError } from '../dsm/errors.js';
 import { renderError, renderResult } from './format.js';
+/** A reply carrying a picture for the model to look at, next to a short JSON description. */
+export class ImageReply {
+    data;
+    mimeType;
+    about;
+    constructor(data, mimeType, about) {
+        this.data = data;
+        this.mimeType = mimeType;
+        this.about = about;
+    }
+}
 /** Define a tool with its handler's arguments inferred from the input shape. */
 export function tool(def) {
     return def;
@@ -88,6 +99,14 @@ export function registerTools(server, selection, deps) {
             };
             try {
                 const result = await def.handler(args ?? {}, context);
+                if (result instanceof ImageReply) {
+                    return {
+                        content: [
+                            { type: 'text', text: renderResult(result.about, deps.config.maxOutputChars) },
+                            { type: 'image', data: result.data.toString('base64'), mimeType: result.mimeType },
+                        ],
+                    };
+                }
                 return { content: [{ type: 'text', text: renderResult(result, deps.config.maxOutputChars) }] };
             }
             catch (error) {

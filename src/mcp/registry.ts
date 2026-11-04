@@ -52,6 +52,15 @@ export interface ToolDef {
   handler(args: any, context: ToolContext): Promise<unknown>;
 }
 
+/** A reply carrying a picture for the model to look at, next to a short JSON description. */
+export class ImageReply {
+  constructor(
+    readonly data: Buffer,
+    readonly mimeType: string,
+    readonly about: Record<string, unknown>,
+  ) {}
+}
+
 /** Define a tool with its handler's arguments inferred from the input shape. */
 export function tool<S extends z.ZodRawShape>(
   def: Omit<ToolDef, 'input' | 'handler'> & {
@@ -156,6 +165,14 @@ export function registerTools(server: McpServer, selection: Selection, deps: Reg
         };
         try {
           const result = await def.handler(args ?? {}, context);
+          if (result instanceof ImageReply) {
+            return {
+              content: [
+                { type: 'text', text: renderResult(result.about, deps.config.maxOutputChars) },
+                { type: 'image', data: result.data.toString('base64'), mimeType: result.mimeType },
+              ],
+            };
+          }
           return { content: [{ type: 'text', text: renderResult(result, deps.config.maxOutputChars) }] };
         } catch (error) {
           const mapped = error instanceof DsmError ? error : deps.client.toDsmError(error);
